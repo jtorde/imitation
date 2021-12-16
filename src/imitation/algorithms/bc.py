@@ -393,11 +393,14 @@ class BC(algo_base.DemonstrationAlgorithm):
                 #   EvalCallback could be a good fit:
                 #   https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html#evalcallback
                 if log_rollouts_venv is not None and log_rollouts_n_episodes > 0:
+                    print("Going to evaluate student!!")
+
                     trajs = rollout.generate_trajectories(
                         self.policy,
                         log_rollouts_venv,
                         rollout.make_min_episodes(log_rollouts_n_episodes),
                     )
+                    print("Student evaluated!!")
                     stats, traj_descriptors = rollout.rollout_stats(trajs)
                     self.logger.record("batch_size", len(batch["obs"]))
                     for k, v in stats.items():

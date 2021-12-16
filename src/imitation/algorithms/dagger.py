@@ -22,6 +22,7 @@ from imitation.algorithms import base, bc
 from imitation.data import rollout, types
 from imitation.util import logger, util
 
+from colorama import init, Fore, Back, Style
 
 class BetaSchedule(abc.ABC):
     """Computes beta (% of time demonstration action used) from training round."""
@@ -176,6 +177,11 @@ class InteractiveTrajectoryCollector(vec_env.VecEnvWrapper):
         self._last_user_actions = None
         self.rng = np.random.RandomState()
 
+        self.name=Style.BRIGHT+Fore.MAGENTA+"[ITC]"+Style.RESET_ALL
+
+    def printWithName(self,data):
+        print(self.name+data)
+
     def seed(self, seed=Optional[int]) -> List[Union[None, int]]:
         """Set the seed for the DAgger random number generator and wrapped VecEnv.
 
@@ -234,6 +240,9 @@ class InteractiveTrajectoryCollector(vec_env.VecEnvWrapper):
         mask = self.rng.uniform(0, 1, size=(self.num_envs,)) > self.beta
         if np.sum(mask) != 0:
             actual_acts[mask] = self.get_robot_acts(self._last_obs[mask])
+            print(self.name+f"Beta: {self.beta}, selecting action from "+Style.BRIGHT+Fore.WHITE+"student"+Style.RESET_ALL)#TODO: take into account the mask (when > 1 env in venv)
+        else:
+            print(self.name+f"Beta: {self.beta}, selecting action from "+Style.BRIGHT+Fore.BLUE+"expert"+Style.RESET_ALL)#TODO: take into account the mask (when > 1 env in venv)
 
         self._last_user_actions = actions
         self.venv.step_async(actual_acts)
@@ -378,6 +387,12 @@ class DAggerTrainer(base.BaseImitationAlgorithm):
             num_demos_by_round.append(len(demo_paths))
         logging.info(f"Loaded {len(self._all_demos)} total")
         demo_transitions = rollout.flatten_trajectories(self._all_demos)
+        ##Added by jtorde
+        total_number_action_obs_pairs=0;
+        for demo in self._all_demos:
+            total_number_action_obs_pairs+=len(demo.obs)
+        print(Style.BRIGHT+Fore.MAGENTA+f"Loaded {len(self._all_demos)} demos in total ({total_number_action_obs_pairs} pair expert action/obs). Will use {int(total_number_action_obs_pairs/self.batch_size)} batches (batch_size={self.batch_size})"+Style.RESET_ALL)
+        ##################
         return demo_transitions, num_demos_by_round
 
     def _get_demo_paths(self, round_dir):
