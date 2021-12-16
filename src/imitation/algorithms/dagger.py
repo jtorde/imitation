@@ -359,6 +359,16 @@ class DAggerTrainer(base.BaseImitationAlgorithm):
     def batch_size(self) -> int:
         return self.bc_trainer.batch_size
 
+    #Function added by @Andrea
+    def load_demos_at_round(self, round_num, augmented_demos=True):
+        round_dir = self._demo_dir_path_for_round(round_num)
+        demo_paths = self._get_demo_paths(round_dir)
+        if augmented_demos == True:
+            demos_at_round = [_load_trajectory(p) for p in demo_paths]
+        else:
+            demos_at_round = [_load_trajectory(p) for p in demo_paths if not ("extra" in p)]
+        return demos_at_round
+
     def _load_all_demos(self):
         num_demos_by_round = []
         for round_num in range(self._last_loaded_round + 1, self.round_num + 1):

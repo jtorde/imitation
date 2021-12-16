@@ -315,7 +315,6 @@ class BC(algo_base.DemonstrationAlgorithm):
             )
 
         else:
-            print("obs.shape= ", obs.shape)
             pred_acts = self.policy.forward(obs, deterministic=True)
             loss = th.nn.MSELoss(reduction='mean')(pred_acts.float(), acts.float())
             stats_dict = dict(
@@ -399,7 +398,7 @@ class BC(algo_base.DemonstrationAlgorithm):
                         log_rollouts_venv,
                         rollout.make_min_episodes(log_rollouts_n_episodes),
                     )
-                    stats = rollout.rollout_stats(trajs)
+                    stats, traj_descriptors = rollout.rollout_stats(trajs)
                     self.logger.record("batch_size", len(batch["obs"]))
                     for k, v in stats.items():
                         if "return" in k and "monitor" not in k:
