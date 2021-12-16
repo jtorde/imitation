@@ -290,30 +290,40 @@ class BC(algo_base.DemonstrationAlgorithm):
         obs = th.as_tensor(obs, device=self.device).detach()
         acts = th.as_tensor(acts, device=self.device).detach()
 
-        _, log_prob, entropy = self.policy.evaluate_actions(obs, acts)
-        prob_true_act = th.exp(log_prob).mean()
-        log_prob = log_prob.mean()
-        entropy = entropy.mean()
+        if isinstance(self.policy, policies.ActorCriticPolicy):
+            _, log_prob, entropy = self.policy.evaluate_actions(obs, acts)
+            prob_true_act = th.exp(log_prob).mean()
+            log_prob = log_prob.mean()
+            entropy = entropy.mean()
 
-        l2_norms = [th.sum(th.square(w)) for w in self.policy.parameters()]
-        l2_norm = sum(l2_norms) / 2  # divide by 2 to cancel with gradient of square
+            l2_norms = [th.sum(th.square(w)) for w in self.policy.parameters()]
+            l2_norm = sum(l2_norms) / 2  # divide by 2 to cancel with gradient of square
 
-        ent_loss = -self.ent_weight * entropy
-        neglogp = -log_prob
-        l2_loss = self.l2_weight * l2_norm
-        loss = neglogp + ent_loss + l2_loss
+            ent_loss = -self.ent_weight * entropy
+            neglogp = -log_prob
+            l2_loss = self.l2_weight * l2_norm
+            loss = neglogp + ent_loss + l2_loss
 
-        stats_dict = dict(
-            neglogp=neglogp.item(),
-            loss=loss.item(),
-            entropy=entropy.item(),
-            ent_loss=ent_loss.item(),
-            prob_true_act=prob_true_act.item(),
-            l2_norm=l2_norm.item(),
-            l2_loss=l2_loss.item(),
-        )
+            stats_dict = dict(
+                neglogp=neglogp.item(),
+                loss=loss.item(),
+                entropy=entropy.item(),
+                ent_loss=ent_loss.item(),
+                prob_true_act=prob_true_act.item(),
+                l2_norm=l2_norm.item(),
+                l2_loss=l2_loss.item(),
+            )
+
+        else:
+            print("obs.shape= ", obs.shape)
+            pred_acts = self.policy.forward(obs, deterministic=True)
+            loss = th.nn.MSELoss(reduction='mean')(pred_acts.float(), acts.float())
+            stats_dict = dict(
+                loss=loss.item(),
+            )
 
         return loss, stats_dict
+
 
     def train(
         self,
