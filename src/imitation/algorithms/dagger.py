@@ -383,6 +383,7 @@ class DAggerTrainer(base.BaseImitationAlgorithm):
         for round_num in range(self._last_loaded_round + 1, self.round_num + 1):
             round_dir = self._demo_dir_path_for_round(round_num)
             demo_paths = self._get_demo_paths(round_dir)
+            print(Style.BRIGHT+Fore.MAGENTA+"Extending dataset with demos of folder ", round_dir, Style.RESET_ALL)
             self._all_demos.extend(_load_trajectory(p) for p in demo_paths)
             num_demos_by_round.append(len(demo_paths))
         logging.info(f"Loaded {len(self._all_demos)} total")
