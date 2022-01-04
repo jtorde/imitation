@@ -18,6 +18,8 @@ from imitation.data import rollout, types
 from imitation.policies import base as policy_base
 from imitation.util import logger
 
+from scipy.optimize import linear_sum_assignment
+
 
 def reconstruct_policy(
     policy_path: str,
@@ -197,6 +199,7 @@ class BC(algo_base.DemonstrationAlgorithm):
         l2_weight: float = 0.0,
         device: Union[str, th.device] = "auto",
         custom_logger: Optional[logger.HierarchicalLogger] = None,
+        traj_size_pos_ctrl_pts = None
     ):
         """Builds BC.
 
@@ -222,6 +225,7 @@ class BC(algo_base.DemonstrationAlgorithm):
             ValueError: If `weight_decay` is specified in `optimizer_kwargs` (use the
                 parameter `l2_weight` instead.)
         """
+        self.traj_size_pos_ctrl_pts=traj_size_pos_ctrl_pts;
         self.batch_size = batch_size
         super().__init__(
             demonstrations=demonstrations,
@@ -316,7 +320,73 @@ class BC(algo_base.DemonstrationAlgorithm):
 
         else:
             pred_acts = self.policy.forward(obs, deterministic=True)
-            loss = th.nn.MSELoss(reduction='mean')(pred_acts.float(), acts.float())
+            # print("=====================================PRED ACTS")
+            # print("pred_acts.shape= ", pred_acts.shape)
+            # print("pred_acts.float()= ", pred_acts.float())
+            # print("\n\n\n\n\n=====================================ACTS")
+            # print("acts.shape= ", acts.shape)
+            # print("acts.float()= ", acts.float())
+            # loss = th.nn.MSELoss(reduction='mean')(pred_acts.float(), acts.float())
+            ##########################
+
+            #Expert --> i
+            #Student --> j
+            num_of_traj_per_action=list(acts.shape)[1] #acts.shape is [batch size, num_traj_action, size_traj]
+            batch_size=list(acts.shape)[0] #acts.shape is [batch size, num_of_traj_per_action, size_traj]
+            
+            distance_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
+            distance_pos_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
+
+            for index_batch in range(batch_size):           
+                for i in range(num_of_traj_per_action):
+                    for j in range(num_of_traj_per_action):
+
+                        expert_i=acts[index_batch,i,:].float();
+                        expert_pos_i=acts[index_batch,i,0:self.traj_size_pos_ctrl_pts].float();
+
+                        student_j=pred_acts[index_batch,j,:].float()
+                        student_pos_j=pred_acts[index_batch,j,0:self.traj_size_pos_ctrl_pts].float()
+
+                        distance_matrix[index_batch,i,j]=th.nn.MSELoss(reduction='mean')(expert_i, student_j)
+                        distance_pos_matrix[index_batch,i,j]=th.nn.MSELoss(reduction='mean')(expert_pos_i, student_pos_j)
+    
+                        # print(f"Expert {i} = ",expert_pos_i)
+            #distance_matrix[:,i,j] is a vector of batch_size elements
+            # print("distance_pos_matrix=\n", distance_pos_matrix)
+
+
+
+            alpha_matrix=th.ones(batch_size, num_of_traj_per_action, num_of_traj_per_action);
+
+            if(num_of_traj_per_action>1):
+                epsilon=0.05
+                alpha_matrix=(epsilon/(num_of_traj_per_action-1)) * alpha_matrix;
+
+                #Option 1: Solve assignment problem
+                for index_batch in range(batch_size): 
+                    row_ind, col_ind = linear_sum_assignment(distance_pos_matrix[index_batch,:,:].detach().numpy())
+                    for m in row_ind:
+                        alpha_matrix[index_batch, row_ind[m], col_ind[m]]=1-epsilon
+
+                #Option 2: Eq.6 of https://arxiv.org/pdf/2110.05113.pdf
+                #for index_batch in range(batch_size): 
+                #    for j in range(num_of_traj_per_action): #for each column (student traj)
+                #        # get minimum of the column and assign 1-epsilon to it
+                #        # print("distance_pos_matrix[:,j]= ", distance_pos_matrix[:,j])
+                #        (min_value, argmin_index_row)=th.min(distance_pos_matrix[index_batch,:,j], dim=0) 
+                #        # print("argmin_index_row= ", argmin_index_row)
+                #        alpha_matrix[index_batch, argmin_index_row,j]=1-epsilon
+
+            # print("alpha_matrix=\n", alpha_matrix)
+            # print("distance_pos_matrix=\n", distance_pos_matrix)
+
+            loss=th.sum(alpha_matrix*distance_matrix)  #Elementwise mult, see https://stackoverflow.com/questions/53369667/pytorch-element-wise-product-of-vectors-matrices-tensors
+            
+            # print("loss=\n", loss)
+
+            # print("loss=\n ",loss)
+
+            ##########################
             stats_dict = dict(
                 loss=loss.item(),
             )
