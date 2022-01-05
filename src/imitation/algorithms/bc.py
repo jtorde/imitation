@@ -332,24 +332,51 @@ class BC(algo_base.DemonstrationAlgorithm):
             #Expert --> i
             #Student --> j
             num_of_traj_per_action=list(acts.shape)[1] #acts.shape is [batch size, num_traj_action, size_traj]
+            num_of_elements_per_traj=list(acts.shape)[2] #acts.shape is [batch size, num_traj_action, size_traj]
             batch_size=list(acts.shape)[0] #acts.shape is [batch size, num_of_traj_per_action, size_traj]
             
+            #### OLD
+            # distance_matrix_old= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
+            # distance_pos_matrix_old= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
+
+            # for index_batch in range(batch_size):           
+            #     for i in range(num_of_traj_per_action):
+            #         for j in range(num_of_traj_per_action):
+
+            #             expert_i=acts[index_batch,i,:].float();
+            #             expert_pos_i=acts[index_batch,i,0:self.traj_size_pos_ctrl_pts].float();
+
+            #             student_j=pred_acts[index_batch,j,:].float()
+            #             student_pos_j=pred_acts[index_batch,j,0:self.traj_size_pos_ctrl_pts].float()
+
+            #             distance_matrix_old[index_batch,i,j]=th.nn.MSELoss(reduction='mean')(expert_i, student_j)
+            #             distance_pos_matrix_old[index_batch,i,j]=th.nn.MSELoss(reduction='mean')(expert_pos_i, student_pos_j)
+    
+
+            ############################
+
             distance_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
             distance_pos_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
 
-            for index_batch in range(batch_size):           
-                for i in range(num_of_traj_per_action):
-                    for j in range(num_of_traj_per_action):
+            for i in range(num_of_traj_per_action):
+                for j in range(num_of_traj_per_action):
 
-                        expert_i=acts[index_batch,i,:].float();
-                        expert_pos_i=acts[index_batch,i,0:self.traj_size_pos_ctrl_pts].float();
+                    expert_i=acts[:,i,:].float();
+                    expert_pos_i=acts[:,i,0:self.traj_size_pos_ctrl_pts].float();
 
-                        student_j=pred_acts[index_batch,j,:].float()
-                        student_pos_j=pred_acts[index_batch,j,0:self.traj_size_pos_ctrl_pts].float()
+                    student_j=pred_acts[:,j,:].float()
+                    student_pos_j=pred_acts[:,j,0:self.traj_size_pos_ctrl_pts].float()
 
-                        distance_matrix[index_batch,i,j]=th.nn.MSELoss(reduction='mean')(expert_i, student_j)
-                        distance_pos_matrix[index_batch,i,j]=th.nn.MSELoss(reduction='mean')(expert_pos_i, student_pos_j)
-    
+                    distance_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_i, student_j), dim=1)/num_of_elements_per_traj
+                    distance_pos_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_pos_i, student_pos_j), dim=1)/self.traj_size_pos_ctrl_pts
+
+            # th.sum(
+
+            # print("Difference=",distance_matrix-distance_matrix_old)
+            # print("Difference Pos=",distance_pos_matrix-distance_pos_matrix_old)
+
+            ############################
+
                         # print(f"Expert {i} = ",expert_pos_i)
             #distance_matrix[:,i,j] is a vector of batch_size elements
             # print("distance_pos_matrix=\n", distance_pos_matrix)
