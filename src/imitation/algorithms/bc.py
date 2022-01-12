@@ -19,6 +19,7 @@ from imitation.policies import base as policy_base
 from imitation.util import logger
 
 from scipy.optimize import linear_sum_assignment
+import math
 
 
 def reconstruct_policy(
@@ -386,17 +387,26 @@ class BC(algo_base.DemonstrationAlgorithm):
             alpha_matrix=th.ones(batch_size, num_of_traj_per_action, num_of_traj_per_action);
 
             if(num_of_traj_per_action>1):
-                epsilon=0.05
-                alpha_matrix=(epsilon/(num_of_traj_per_action-1)) * alpha_matrix;
 
                 #Option 1: Solve assignment problem
+                epsilon=0.00
+                alpha_matrix=(epsilon/(num_of_traj_per_action-1)) * alpha_matrix;
                 for index_batch in range(batch_size): 
                     row_ind, col_ind = linear_sum_assignment(distance_pos_matrix[index_batch,:,:].detach().numpy())
                     for m in row_ind:
                         alpha_matrix[index_batch, row_ind[m], col_ind[m]]=1-epsilon
 
-                #Option 2: Eq.6 of https://arxiv.org/pdf/2110.05113.pdf
-                #for index_batch in range(batch_size): 
+                #Option 3: simply the identity matrix
+                # x = th.eye(num_of_traj_per_action)
+                # x = x.reshape((1, num_of_traj_per_action, num_of_traj_per_action))
+                # alpha_matrix = x.repeat(batch_size, 1, 1)
+
+                # print("alpha_matrix=\n", alpha_matrix)
+
+                #Option 2: Eq.6 of https://arxiv.org/pdf/2110.05113.pdfs
+                # epsilon=0.05
+                # alpha_matrix=(epsilon/(num_of_traj_per_action-1)) * alpha_matrix;
+                # for index_batch in range(batch_size): 
                 #    for j in range(num_of_traj_per_action): #for each column (student traj)
                 #        # get minimum of the column and assign 1-epsilon to it
                 #        # print("distance_pos_matrix[:,j]= ", distance_pos_matrix[:,j])
@@ -407,7 +417,7 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print("alpha_matrix=\n", alpha_matrix)
             # print("distance_pos_matrix=\n", distance_pos_matrix)
 
-            loss=th.sum(alpha_matrix*distance_matrix)  #Elementwise mult, see https://stackoverflow.com/questions/53369667/pytorch-element-wise-product-of-vectors-matrices-tensors
+            loss=th.sum(alpha_matrix*distance_pos_matrix)  #Elementwise mult, see https://stackoverflow.com/questions/53369667/pytorch-element-wise-product-of-vectors-matrices-tensors
             
             # print("loss=\n", loss)
 
@@ -433,6 +443,7 @@ class BC(algo_base.DemonstrationAlgorithm):
         log_rollouts_n_episodes: int = 5,
         progress_bar: bool = True,
         reset_tensorboard: bool = False,
+        save_full_policy_path=None
     ):
         """Train with supervised learning for some number of epochs.
 
@@ -485,6 +496,11 @@ class BC(algo_base.DemonstrationAlgorithm):
                 for stats in [stats_dict_it, stats_dict_loss]:
                     for k, v in stats.items():
                         self.logger.record(f"bc/{k}", v)
+
+                if(save_full_policy_path!=None):
+                    index = save_full_policy_path.find('.pt')
+                    tmp = save_full_policy_path[:index] + "_log" + str(math.floor(batch_num/log_interval)) + save_full_policy_path[index:]
+                    self.save_policy(tmp)
                 # TODO(shwang): Maybe instead use a callback that can be shared between
                 #   all algorithms' `.train()` for generating rollout stats.
                 #   EvalCallback could be a good fit:
