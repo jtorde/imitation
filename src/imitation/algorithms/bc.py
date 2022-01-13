@@ -200,7 +200,8 @@ class BC(algo_base.DemonstrationAlgorithm):
         l2_weight: float = 0.0,
         device: Union[str, th.device] = "auto",
         custom_logger: Optional[logger.HierarchicalLogger] = None,
-        traj_size_pos_ctrl_pts = None
+        traj_size_pos_ctrl_pts = None,
+        weight_prob=0.01
     ):
         """Builds BC.
 
@@ -227,6 +228,7 @@ class BC(algo_base.DemonstrationAlgorithm):
                 parameter `l2_weight` instead.)
         """
         self.traj_size_pos_ctrl_pts=traj_size_pos_ctrl_pts;
+        self.weight_prob=weight_prob;
         self.batch_size = batch_size
         super().__init__(
             demonstrations=demonstrations,
@@ -330,6 +332,8 @@ class BC(algo_base.DemonstrationAlgorithm):
             # loss = th.nn.MSELoss(reduction='mean')(pred_acts.float(), acts.float())
             ##########################
 
+            used_device=acts.device;
+
             #Expert --> i
             #Student --> j
             num_of_traj_per_action=list(acts.shape)[1] #acts.shape is [batch size, num_traj_action, size_traj]
@@ -356,17 +360,22 @@ class BC(algo_base.DemonstrationAlgorithm):
 
             ############################
 
-            distance_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
-            distance_pos_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action); 
+            # acts[:,:,-1]=2*(th.randint(0, 2, acts[:,:,-1].shape, device=used_device) - 0.5*th.ones(acts[:,:,-1].shape, device=used_device))
+            # print(f"acts[:,:,:]=\n{acts[:,:,:]}")
+            # print(f"acts[:,:,-1]=\n{acts[:,:,-1]}")
+
+
+            distance_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
+            distance_pos_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
 
             for i in range(num_of_traj_per_action):
                 for j in range(num_of_traj_per_action):
 
-                    expert_i=acts[:,i,:].float();
-                    expert_pos_i=acts[:,i,0:self.traj_size_pos_ctrl_pts].float();
+                    expert_i=       acts[:,i,0:-1].float(); #All the elements but the last one
+                    expert_pos_i=   acts[:,i,0:self.traj_size_pos_ctrl_pts].float();
 
-                    student_j=pred_acts[:,j,:].float()
-                    student_pos_j=pred_acts[:,j,0:self.traj_size_pos_ctrl_pts].float()
+                    student_j=      pred_acts[:,j,0:-1].float() #All the elements but the last one
+                    student_pos_j=  pred_acts[:,j,0:self.traj_size_pos_ctrl_pts].float()
 
                     distance_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_i, student_j), dim=1)/num_of_elements_per_traj
                     distance_pos_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_pos_i, student_pos_j), dim=1)/self.traj_size_pos_ctrl_pts
@@ -383,18 +392,38 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print("distance_pos_matrix=\n", distance_pos_matrix)
 
 
-
-            alpha_matrix=th.ones(batch_size, num_of_traj_per_action, num_of_traj_per_action);
+            alpha_matrix=th.ones(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device);
+            distance_pos_matrix_numpy=distance_pos_matrix.cpu().detach().numpy();
 
             if(num_of_traj_per_action>1):
 
                 #Option 1: Solve assignment problem
-                epsilon=0.00
-                alpha_matrix=(epsilon/(num_of_traj_per_action-1)) * alpha_matrix;
+                alpha_matrix=th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device);
                 for index_batch in range(batch_size): 
-                    row_ind, col_ind = linear_sum_assignment(distance_pos_matrix[index_batch,:,:].detach().numpy())
-                    for m in row_ind:
-                        alpha_matrix[index_batch, row_ind[m], col_ind[m]]=1-epsilon
+                    cost_matrix=distance_pos_matrix_numpy[index_batch,:,:];
+                    map2RealRows=np.array(range(num_of_traj_per_action))
+                    map2RealCols=np.array(range(num_of_traj_per_action))
+
+                    rows_to_delete=[]
+                    for i in range(num_of_traj_per_action):
+                        expert_prob=th.round(acts[index_batch, i, -1]) #this should be either 1 or -1
+                        if(expert_prob==-1): 
+                            #Delete that row
+                            rows_to_delete.append(i)
+
+                    # print(f"Deleting index_batch={index_batch}, rows_to_delete={rows_to_delete}")
+                    cost_matrix=np.delete(cost_matrix, rows_to_delete, axis=0)
+                    map2RealRows=np.delete(map2RealRows, rows_to_delete, axis=0)
+
+                    row_indexes, col_indexes = linear_sum_assignment(cost_matrix)
+                    for row_index, col_index in zip(row_indexes, col_indexes):
+                        alpha_matrix[index_batch, map2RealRows[row_index], map2RealCols[col_index]]=1
+                        # alpha_matrix[index_batch, row_index, col_index]=1-epsilon
+
+                # print(f"alpha_matrix={alpha_matrix}")
+                col_assigned=th.round(th.sum(alpha_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns have been assigned
+                col_not_assigned=(~(col_assigned.bool())).float();
+                col_assigned=col_assigned.float()
 
                 #Option 3: simply the identity matrix
                 # x = th.eye(num_of_traj_per_action)
@@ -415,9 +444,29 @@ class BC(algo_base.DemonstrationAlgorithm):
                 #        alpha_matrix[index_batch, argmin_index_row,j]=1-epsilon
 
             # print("alpha_matrix=\n", alpha_matrix)
+            # print(f"col_assigned=\n {col_assigned}")
+            # print(f"col_not_assigned=\n {col_not_assigned}")
+
             # print("distance_pos_matrix=\n", distance_pos_matrix)
 
-            loss=th.sum(alpha_matrix*distance_pos_matrix)  #Elementwise mult, see https://stackoverflow.com/questions/53369667/pytorch-element-wise-product-of-vectors-matrices-tensors
+            # print(f"===============")
+            # print(f"distance_pos_matrix.device={distance_pos_matrix.device}")
+            # print(f"alpha_matrix.device={alpha_matrix.device}")
+            # print(f"===============")
+            # print(f"student_probs.device= {student_probs.device}")
+            student_probs=pred_acts[:,:,-1]
+            tmp=th.ones(student_probs.shape, device=used_device)
+            # print(f"tmp.device= {tmp.device}")
+            # print(f"col_assigned.device= {col_assigned.device}")
+            #Elementwise mult, see https://stackoverflow.com/questions/53369667/pytorch-element-wise-product-of-vectors-matrices-tensors
+            # print("===========================")
+            # print("student_probs=\n", student_probs)
+            # print("col_assigned=\n", col_assigned)
+            # print("uno=\n", col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp))
+            # print("dos=\n", col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp))
+            loss=th.sum(alpha_matrix*distance_pos_matrix) +self.weight_prob*(\
+                 th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp)) +\
+                 th.sum(col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp)))
             
             # print("loss=\n", loss)
 
