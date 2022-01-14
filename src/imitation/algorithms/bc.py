@@ -464,9 +464,21 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print("col_assigned=\n", col_assigned)
             # print("uno=\n", col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp))
             # print("dos=\n", col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp))
-            loss=th.sum(alpha_matrix*distance_pos_matrix) +self.weight_prob*(\
-                 th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp)) +\
-                 th.sum(col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp)))
+            assert (distance_pos_matrix.shape)[0]==(student_probs.shape)[0], f"Wrong shape!, distance_pos_matrix.shape={distance_pos_matrix.shape}, student_probs.shape={student_probs.shape}"
+            assert (distance_pos_matrix.shape)[1]==(student_probs.shape)[1], f"Wrong shape!, distance_pos_matrix.shape={distance_pos_matrix.shape}, student_probs.shape={student_probs.shape}"
+            assert (distance_pos_matrix.shape)[0]==batch_size, "Wrong shape!"
+            assert (distance_pos_matrix.shape)[1]==num_of_traj_per_action, "Wrong shape!"
+
+            #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
+
+            loss=(
+                 (1/(batch_size*num_of_traj_per_action))*
+                 (th.sum(alpha_matrix*distance_pos_matrix) #This sum has batch_size*num_of_traj_per_action terms (total of nonzero elements of alpha_matrix) 
+                 +self.weight_prob*(
+                 th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp)) + th.sum(col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp)) # This sum has batch_size*num_of_traj_per_action terms
+                                   )
+                 )
+                 )
             
             # print("loss=\n", loss)
 
