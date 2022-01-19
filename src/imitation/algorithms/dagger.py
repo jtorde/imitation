@@ -23,6 +23,10 @@ from imitation.data import rollout, types
 from imitation.util import logger, util
 
 from colorama import init, Fore, Back, Style
+import copy
+
+class NotEnoughTransitionsForBatch(Exception):
+      pass
 
 class BetaSchedule(abc.ABC):
     """Computes beta (% of time demonstration action used) from training round."""
@@ -238,11 +242,19 @@ class InteractiveTrajectoryCollector(vec_env.VecEnvWrapper):
         actual_acts = np.array(actions)
 
         mask = self.rng.uniform(0, 1, size=(self.num_envs,)) > self.beta
-        if np.sum(mask) != 0:
-            actual_acts[mask] = self.get_robot_acts(self._last_obs[mask])
-            print(self.name+f"Beta: {self.beta}, selecting action from "+Style.BRIGHT+Fore.WHITE+"student"+Style.RESET_ALL)#TODO: take into account the mask (when > 1 env in venv)
+        ######## For printing:
+        selection=[Style.BRIGHT+Fore.WHITE+"student"+Style.RESET_ALL for _ in mask.tolist()]
+        for i in range(len(mask)):
+            if mask[i]==False:
+                selection[i]=Style.BRIGHT+Fore.BLUE+"expert"+Style.RESET_ALL
+        print(self.name+f"Beta: {self.beta}, selecting action from",', '.join(str(item) for item in selection)) #https://stackoverflow.com/a/67172597/6057617
+        # print(', '.join(str(item) for item in selection))
+        #############
+
+        if np.sum(mask) != 0: #If there is at least one env for which rand()>self.beta
+            actual_acts[mask] = self.get_robot_acts(self._last_obs[mask]) #Get the student actions for the cases where mask_i==True. Retain the expert actions when mask_i==False
         else:
-            print(self.name+f"Beta: {self.beta}, selecting action from "+Style.BRIGHT+Fore.BLUE+"expert"+Style.RESET_ALL)#TODO: take into account the mask (when > 1 env in venv)
+            pass
 
         self._last_user_actions = actions
         self.venv.step_async(actual_acts)
@@ -425,11 +437,15 @@ class DAggerTrainer(base.BaseImitationAlgorithm):
                 f"Loaded {sum(num_demos)} new demos from {len(num_demos)} rounds",
             )
             if len(transitions) < self.batch_size:
-                raise ValueError(
-                    "Not enough transitions to form a single batch: "
+                # raise ValueError(
+                #     "Not enough transitions to form a single batch: "
+                #     f"self.batch_size={self.batch_size} > "
+                #     f"len(transitions)={len(transitions)}",
+                # )
+                print("Not enough transitions to form a single batch: "
                     f"self.batch_size={self.batch_size} > "
-                    f"len(transitions)={len(transitions)}",
-                )
+                    f"len(transitions)={len(transitions)}")
+                raise NotEnoughTransitionsForBatch()
             data_loader = th_data.DataLoader(
                 transitions,
                 self.batch_size,
@@ -493,7 +509,7 @@ class DAggerTrainer(base.BaseImitationAlgorithm):
         beta = self.beta_schedule(self.round_num)
         collector = InteractiveTrajectoryCollector(
             venv=self.venv,
-            get_robot_acts=lambda acts: self.bc_trainer.policy.predict(acts)[0],
+            get_robot_acts=lambda obs: self.bc_trainer.policy.predictSeveral(obs),
             beta=beta,
             save_dir=save_dir,
         )
@@ -597,10 +613,11 @@ class SimpleDAggerTrainer(DAggerTrainer):
 
     def train(
         self,
-        total_timesteps: int,
+        n_rounds: int,
+        only_collect_data=False,
         *,
-        rollout_round_min_episodes: int = 3,
-        rollout_round_min_timesteps: int = 500,
+        # rollout_round_min_episodes: int = 3,
+        n_traj_per_round: int = 1,
         bc_train_kwargs: Optional[dict] = None,
     ) -> None:
         """Train the DAgger agent.
@@ -620,14 +637,14 @@ class SimpleDAggerTrainer(DAggerTrainer):
         all data collected so far.
 
         Args:
-            total_timesteps: The number of timesteps to train inside the environment.
+            n_rounds: The number of timesteps to train inside the environment.
                 In practice this is a lower bound, because the number of timesteps is
                 rounded up to finish the minimum number of episdoes or timesteps in the
                 last DAgger training round, and the environment timesteps are executed
                 in multiples of `self.venv.num_envs`.
             rollout_round_min_episodes: The number of episodes the must be completed
                 completed before a dataset aggregation step ends.
-            rollout_round_min_timesteps: The number of environment timesteps that must
+            n_traj_per_round: The number of environment timesteps that must
                 be completed before a dataset aggregation step ends. Also, that any
                 round will always train for at least `self.batch_size` timesteps,
                 because otherwise BC could fail to receive any batches.
@@ -636,43 +653,60 @@ class SimpleDAggerTrainer(DAggerTrainer):
                 `self.venv` by default. If neither of the `n_epochs` and `n_batches`
                 keys are provided, then `n_epochs` is set to `self.DEFAULT_N_EPOCHS`.
         """
-        total_timestep_count = 0
+        total_round_count = 0
         round_num = 0
 
-        while total_timestep_count < total_timesteps:
-            collector = self.get_trajectory_collector()
-            round_episode_count = 0
-            round_timestep_count = 0
+        while round_num < n_rounds:
 
-            sample_until = rollout.make_sample_until(
-                min_timesteps=max(rollout_round_min_timesteps, self.batch_size),
-                min_episodes=rollout_round_min_episodes,
-            )
+            if(n_traj_per_round>0):
+                collector = self.get_trajectory_collector()
+                round_episode_count = 0
+                round_timestep_count = 0
 
-            trajectories = rollout.generate_trajectories(
-                policy=self.expert_policy,
-                venv=collector,
-                sample_until=sample_until,
-                deterministic_policy=True,
-                rng=collector.rng,
-            )
+                # sample_until = rollout.make_sample_until(
+                #     min_timesteps=max(n_traj_per_round, self.batch_size),
+                #     min_episodes=rollout_round_min_episodes,
+                # )
+                sample_until=rollout.make_min_episodes(n_traj_per_round)
 
-            for traj in trajectories:
-                _save_dagger_demo(traj, collector.save_dir)
-                self._logger.record_mean(
-                    "dagger/mean_episode_reward",
-                    np.sum(traj.rews),
+                # print(f"min_timesteps={max(n_traj_per_round, self.batch_size)}")
+                # print(f"min_episodes={rollout_round_min_episodes}")
+                # exit()
+
+                trajectories = rollout.generate_trajectories(
+                    policy=self.expert_policy,
+                    venv=collector,
+                    sample_until=sample_until,
+                    deterministic_policy=True,
+                    rng=collector.rng,
                 )
-                round_timestep_count += len(traj)
-                total_timestep_count += len(traj)
 
-            round_episode_count += len(trajectories)
+                for traj in trajectories:
+                    # _save_dagger_demo(traj, collector.save_dir) #Already saved in InteractiveTrajectoryCollector-->step_wait
+                    self._logger.record_mean(
+                        "dagger/mean_episode_reward",
+                        np.sum(traj.rews),
+                    )
+                    round_timestep_count += len(traj)
+                    total_round_count += len(traj)
 
-            self._logger.record("dagger/total_timesteps", total_timestep_count)
-            self._logger.record("dagger/round_num", round_num)
-            self._logger.record("dagger/round_episode_count", round_episode_count)
-            self._logger.record("dagger/round_timestep_count", round_timestep_count)
+                round_episode_count += len(trajectories)
 
-            # `logger.dump` is called inside BC.train within the following fn call:
-            self.extend_and_update(bc_train_kwargs)
+                self._logger.record("dagger/total_round_count", total_round_count)
+                self._logger.record("dagger/round_num", round_num)
+                self._logger.record("dagger/round_episode_count", round_episode_count)
+                self._logger.record("dagger/round_timestep_count", round_timestep_count)
+
+            if(only_collect_data==False):
+                bc_train_kwargs_round=copy.deepcopy(bc_train_kwargs)
+                tmp=bc_train_kwargs_round['save_full_policy_path']
+                index = tmp.find('.pt')
+                bc_train_kwargs_round['save_full_policy_path']=tmp[:index] + "_round" + str(round_num) + tmp[index:]
+
+                # `logger.dump` is called inside BC.train within the following fn call:
+                try:
+                    self.extend_and_update(bc_train_kwargs_round)
+                except NotEnoughTransitionsForBatch as e:
+                    pass
+            
             round_num += 1

@@ -10,6 +10,9 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.utils import check_for_correct_spaces
 from stable_baselines3.common.vec_env import VecEnv
+from compression.policies.ExpertPolicy import ExpertPolicy
+from compression.policies.StudentPolicy import StudentPolicy
+
 
 from imitation.data import types
 
@@ -266,6 +269,15 @@ def _policy_to_callable(
             acts = [venv.action_space.sample() for _ in range(len(states))]
             return np.stack(acts, axis=0)
 
+    elif isinstance(policy, (ExpertPolicy,StudentPolicy)):
+
+        def get_actions(states):
+            acts = policy.predictSeveral(  # pytype: disable=attribute-error
+                states,
+                deterministic=deterministic_policy,
+            )
+            return acts    
+
     elif isinstance(policy, (BaseAlgorithm, BasePolicy)):
         # There's an important subtlety here: BaseAlgorithm and BasePolicy
         # are themselves Callable (which we check next). But in their case,
@@ -352,12 +364,17 @@ def generate_trajectories(
     active = np.ones(venv.num_envs, dtype=bool)
     while np.any(active):
         acts = get_actions(obs)
+        for i in range(len(acts)):
+            if(acts[i] is None): #The expert failed
+                active[i]=False;
+
         obs, rews, dones, infos = venv.step(acts)
 
         # If an environment is inactive, i.e. the episode completed for that
         # environment after `sample_until(trajectories)` was true, then we do
         # *not* want to add any subsequent trajectories from it. We avoid this
         # by just making it never done.
+        # Note that only the environments that have done==True are the ones that are finished in add_steps_and_auto_finish 
         dones &= active
 
         new_trajs = trajectories_accum.add_steps_and_auto_finish(
