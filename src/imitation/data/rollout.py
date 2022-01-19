@@ -10,8 +10,6 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.utils import check_for_correct_spaces
 from stable_baselines3.common.vec_env import VecEnv
-from compression.policies.ExpertPolicy import ExpertPolicy
-from compression.policies.StudentPolicy import StudentPolicy
 
 
 from imitation.data import types
@@ -269,7 +267,8 @@ def _policy_to_callable(
             acts = [venv.action_space.sample() for _ in range(len(states))]
             return np.stack(acts, axis=0)
 
-    elif isinstance(policy, (ExpertPolicy,StudentPolicy)):
+    # elif isinstance(policy, (ExpertPolicy,StudentPolicy)): #to avoid importing ExpertPolicy and StudentPolicy in this file
+    elif hasattr(policy, 'predictSeveral'):
 
         def get_actions(states):
             acts = policy.predictSeveral(  # pytype: disable=attribute-error
