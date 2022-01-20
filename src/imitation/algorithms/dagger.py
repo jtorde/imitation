@@ -241,7 +241,13 @@ class InteractiveTrajectoryCollector(vec_env.VecEnvWrapper):
         # Replace each given action with a robot action 100*(1-beta)% of the time.
         actual_acts = np.array(actions)
 
+        not_has_nan=np.full((self.num_envs,),True)
+        for i in range(len(actions)):
+            if(np.isnan(actions[i,:,:]).any()):
+                not_has_nan[i]=False
+
         mask = self.rng.uniform(0, 1, size=(self.num_envs,)) > self.beta
+        mask = mask*not_has_nan #This forces to choose the expert if the action has nans. Note that the expert is designed to handle nans, while the student is not
         ######## For printing:
         selection=[Style.BRIGHT+Fore.WHITE+"student"+Style.RESET_ALL for _ in mask.tolist()]
         for i in range(len(mask)):
@@ -401,10 +407,10 @@ class DAggerTrainer(base.BaseImitationAlgorithm):
         logging.info(f"Loaded {len(self._all_demos)} total")
         demo_transitions = rollout.flatten_trajectories(self._all_demos)
         ##Added by jtorde
-        total_number_action_obs_pairs=0;
+        total_number_pairs=0;
         for demo in self._all_demos:
-            total_number_action_obs_pairs+=len(demo.obs)
-        print(Style.BRIGHT+Fore.MAGENTA+f"Loaded {len(self._all_demos)} demos in total ({total_number_action_obs_pairs} pair expert action/obs). Will use {int(total_number_action_obs_pairs/self.batch_size)} batches (batch_size={self.batch_size})"+Style.RESET_ALL)
+            total_number_pairs+=len(demo.acts)
+        print(Style.BRIGHT+Fore.MAGENTA+f"Loaded {len(self._all_demos)} demos in total ({total_number_pairs} pair expert action/obs). Will use {int(total_number_pairs/self.batch_size)} batches (batch_size={self.batch_size})"+Style.RESET_ALL)
         ##################
         return demo_transitions, num_demos_by_round
 

@@ -364,7 +364,8 @@ def generate_trajectories(
     while np.any(active):
         acts = get_actions(obs)
         for i in range(len(acts)):
-            if(np.isnan(np.sum(acts[i]))): #The expert failed
+            #acts[i,:,:] is the action of environment i
+            if(np.isnan(np.sum(acts[i,:,:]))): #The expert failed
                 active[i]=False;
 
         obs, rews, dones, infos = venv.step(acts)
