@@ -201,6 +201,7 @@ class BC(algo_base.DemonstrationAlgorithm):
         device: Union[str, th.device] = "auto",
         custom_logger: Optional[logger.HierarchicalLogger] = None,
         traj_size_pos_ctrl_pts = None,
+        traj_size_yaw_ctrl_pts = None,
         weight_prob=0.01
     ):
         """Builds BC.
@@ -228,6 +229,7 @@ class BC(algo_base.DemonstrationAlgorithm):
                 parameter `l2_weight` instead.)
         """
         self.traj_size_pos_ctrl_pts=traj_size_pos_ctrl_pts;
+        self.traj_size_yaw_ctrl_pts=traj_size_yaw_ctrl_pts;
         self.weight_prob=weight_prob;
         self.batch_size = batch_size
         super().__init__(
@@ -367,18 +369,28 @@ class BC(algo_base.DemonstrationAlgorithm):
 
             distance_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
             distance_pos_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
+            distance_yaw_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
+            distance_time_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
 
             for i in range(num_of_traj_per_action):
                 for j in range(num_of_traj_per_action):
 
                     expert_i=       acts[:,i,0:-1].float(); #All the elements but the last one
-                    expert_pos_i=   acts[:,i,0:self.traj_size_pos_ctrl_pts].float();
-
                     student_j=      pred_acts[:,j,0:-1].float() #All the elements but the last one
+
+                    expert_pos_i=   acts[:,i,0:self.traj_size_pos_ctrl_pts].float();
                     student_pos_j=  pred_acts[:,j,0:self.traj_size_pos_ctrl_pts].float()
+
+                    expert_yaw_i=   acts[:,i,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float();
+                    student_yaw_j=  pred_acts[:,j,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float()
+
+                    expert_time_i=       acts[:,i,-2].float(); #Time
+                    student_time_j=      pred_acts[:,j,-2].float() #Time
 
                     distance_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_i, student_j), dim=1)/num_of_elements_per_traj
                     distance_pos_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_pos_i, student_pos_j), dim=1)/self.traj_size_pos_ctrl_pts
+                    distance_yaw_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_yaw_i, student_yaw_j), dim=1)/self.traj_size_yaw_ctrl_pts
+                    distance_time_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_time_i, student_time_j), dim=0)
 
             # th.sum(
 
@@ -471,14 +483,18 @@ class BC(algo_base.DemonstrationAlgorithm):
 
             #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
 
-            loss=(
-                 (1/(batch_size*num_of_traj_per_action))*
-                 (th.sum(alpha_matrix*distance_matrix) #This sum has batch_size*num_of_traj_per_action terms (total of nonzero elements of alpha_matrix) 
-                 +self.weight_prob*(
-                 th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp)) + th.sum(col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp)) # This sum has batch_size*num_of_traj_per_action terms
-                                   )
-                 )
-                 )
+            norm_constant=(1/(batch_size*num_of_traj_per_action))
+
+            pos_yaw_time_loss=norm_constant*th.sum(alpha_matrix*distance_matrix)
+            prob_loss=norm_constant*th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp)) + th.sum(col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp)) # This sum has batch_size*num_of_traj_per_action terms
+
+
+            #For debugging
+            pos_loss=norm_constant*th.sum(alpha_matrix*distance_pos_matrix)
+            yaw_loss=norm_constant*th.sum(alpha_matrix*distance_yaw_matrix)
+            time_loss=norm_constant*th.sum(alpha_matrix*distance_time_matrix)
+
+            loss=pos_yaw_time_loss +self.weight_prob*prob_loss;
             
             # print("loss=\n", loss)
 
@@ -487,6 +503,10 @@ class BC(algo_base.DemonstrationAlgorithm):
             ##########################
             stats_dict = dict(
                 loss=loss.item(),
+                pos_loss=pos_loss.item(),
+                yaw_loss=yaw_loss.item(),
+                prob_loss=prob_loss.item(),
+                time_loss=time_loss.item(),
             )
 
         return loss, stats_dict

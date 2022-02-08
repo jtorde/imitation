@@ -238,9 +238,12 @@ class InteractiveTrajectoryCollector(vec_env.VecEnvWrapper):
         """
         assert self._is_reset, "call .reset() before .step()"
 
-        # Replace each given action with a robot action 100*(1-beta)% of the time.
         actual_acts = np.array(actions)
+        #Make the environment record that expert action
+        for i in range(self.num_envs):
+            self.venv.env_method("saveInBag", actual_acts[i],  indices=[i]) 
 
+        # Replace each given action with a robot action 100*(1-beta)% of the time.
         not_has_nan=np.full((self.num_envs,),True)
         for i in range(len(actions)):
             if(np.isnan(actions[i,:,:]).any()):
