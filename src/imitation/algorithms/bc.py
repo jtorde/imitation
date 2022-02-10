@@ -384,13 +384,28 @@ class BC(algo_base.DemonstrationAlgorithm):
                     expert_yaw_i=   acts[:,i,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float();
                     student_yaw_j=  pred_acts[:,j,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float()
 
-                    expert_time_i=       acts[:,i,-2].float(); #Time
-                    student_time_j=      pred_acts[:,j,-2].float() #Time
+                    expert_time_i=       acts[:,i,-2:-1].float(); #Time. Note: Is you use only -2 (instead of -2:-1), then distance_time_matrix will have required_grad to false
+                    student_time_j=      pred_acts[:,j,-2:-1].float() #Time. Note: Is you use only -2 (instead of -2:-1), then distance_time_matrix will have required_grad to false
 
-                    distance_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_i, student_j), dim=1)/num_of_elements_per_traj
-                    distance_pos_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_pos_i, student_pos_j), dim=1)/self.traj_size_pos_ctrl_pts
-                    distance_yaw_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_yaw_i, student_yaw_j), dim=1)/self.traj_size_yaw_ctrl_pts
-                    distance_time_matrix[:,i,j]=th.sum(th.nn.MSELoss(reduction='none')(expert_time_i, student_time_j), dim=0)
+                    distance_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_i, student_j), dim=1)
+                    distance_pos_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_pos_i, student_pos_j), dim=1)
+                    distance_yaw_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_yaw_i, student_yaw_j), dim=1)
+                    distance_time_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_time_i, student_time_j), dim=1)
+
+            # print(f"expert_time_i={expert_time_i}")
+            # print(f"student_time_j={student_time_j}")
+            # print(f"distance_time_matrix[:,i,j]={distance_time_matrix[:,i,j]}")
+            # print(f"distance_pos_matrix[:,i,j]={distance_pos_matrix[:,i,j]}")
+
+            # print(f"distance_matrix.requires_grad={distance_matrix.requires_grad}")
+            # print(f"distance_pos_matrix.requires_grad={distance_pos_matrix.requires_grad}")
+            # print(f"distance_yaw_matrix.requires_grad={distance_yaw_matrix.requires_grad}")
+            # print(f"distance_time_matrix.requires_grad={distance_time_matrix.requires_grad}")
+
+            assert distance_matrix.requires_grad==True
+            assert distance_pos_matrix.requires_grad==True
+            assert distance_yaw_matrix.requires_grad==True
+            assert distance_time_matrix.requires_grad==True
 
             # th.sum(
 
@@ -433,7 +448,7 @@ class BC(algo_base.DemonstrationAlgorithm):
                         # alpha_matrix[index_batch, row_index, col_index]=1-epsilon
 
                 # print(f"alpha_matrix={alpha_matrix}")
-                col_assigned=th.round(th.sum(alpha_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns have been assigned
+                col_assigned=th.round(th.sum(alpha_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns (of the 3rd batch) have been assigned
                 col_not_assigned=(~(col_assigned.bool())).float();
                 col_assigned=col_assigned.float()
 
@@ -467,7 +482,7 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print(f"===============")
             # print(f"student_probs.device= {student_probs.device}")
             student_probs=pred_acts[:,:,-1]
-            tmp=th.ones(student_probs.shape, device=used_device)
+            ones=th.ones(student_probs.shape, device=used_device)
             # print(f"tmp.device= {tmp.device}")
             # print(f"col_assigned.device= {col_assigned.device}")
             #Elementwise mult, see https://stackoverflow.com/questions/53369667/pytorch-element-wise-product-of-vectors-matrices-tensors
@@ -484,17 +499,40 @@ class BC(algo_base.DemonstrationAlgorithm):
             #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
 
             norm_constant=(1/(batch_size*num_of_traj_per_action))
+            num_nonzero_alpha=th.count_nonzero(alpha_matrix);
 
-            pos_yaw_time_loss=norm_constant*th.sum(alpha_matrix*distance_matrix)
-            prob_loss=norm_constant*th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp)) + th.sum(col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp)) # This sum has batch_size*num_of_traj_per_action terms
+            #col_assigned has elements in [0,1](False/True)
+            expert_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
+            
+
+            # print(f"tmp={tmp}")
+            # print(f"alpha_matrix=\n{alpha_matrix[0,:,:]}")
+            # print(f"num_nonzero_alpha={th.count_nonzero(alpha_matrix[0,:,:])}")
+
+            # print("col_assigned=\n", col_assigned)
+            # print("col_not_assigned=\n", col_not_assigned)
+            # print("student_probs=\n", student_probs)
+            # print("loss col_assigned=\n", (col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones)))
+            # print("loss col_not_assigned=\n",(col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones)))
+            # print("loss assignment=\n",col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones))
 
 
-            #For debugging
-            pos_loss=norm_constant*th.sum(alpha_matrix*distance_pos_matrix)
-            yaw_loss=norm_constant*th.sum(alpha_matrix*distance_yaw_matrix)
-            time_loss=norm_constant*th.sum(alpha_matrix*distance_time_matrix)
+            pos_yaw_time_loss=th.sum(alpha_matrix*distance_matrix)/num_nonzero_alpha
+            prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, expert_probs)
+            # prob_loss=(th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones)))/th.numel(student_probs) # This sum has batch_size*num_of_traj_per_action terms
 
-            loss=pos_yaw_time_loss +self.weight_prob*prob_loss;
+            # print(f"prob_loss={prob_loss}")
+
+            pos_loss=th.sum(alpha_matrix*distance_pos_matrix)/num_nonzero_alpha
+            yaw_loss=th.sum(alpha_matrix*distance_yaw_matrix)/num_nonzero_alpha
+            time_loss=th.sum(alpha_matrix*distance_time_matrix)/num_nonzero_alpha
+
+            assert pos_loss.requires_grad==True
+            assert yaw_loss.requires_grad==True
+            assert time_loss.requires_grad==True
+            assert prob_loss.requires_grad==True
+
+            loss=pos_loss + yaw_loss + time_loss +self.weight_prob*prob_loss;
             
             # print("loss=\n", loss)
 

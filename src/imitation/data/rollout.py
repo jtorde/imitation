@@ -310,11 +310,12 @@ def _policy_to_callable(
 
 def generate_trajectories(
     policy: AnyPolicy,
-    venv: VecEnv,
-    sample_until: GenTrajTerminationFn,
+    venv: VecEnv, #Note that a InteractiveTrajectoryCollector is also valid here
+    sample_until: GenTrajTerminationFn = None, #not used anymore
     *,
     deterministic_policy: bool = False,
     rng: np.random.RandomState = np.random,
+    total_demos_per_round = float("inf"),
 ) -> Sequence[types.TrajectoryWithRew]:
     """Generate trajectory dictionaries from a policy and an environment.
 
@@ -361,19 +362,26 @@ def generate_trajectories(
     #
     # To start with, all environments are active.
     active = np.ones(venv.num_envs, dtype=bool)
-    while np.any(active):
+    num_demos=0;
+    while np.any(active) and num_demos<total_demos_per_round:
         acts = get_actions(obs)
         for i in range(len(acts)):
             #acts[i,:,:] is the action of environment i
-            if(np.isnan(np.sum(acts[i,:,:]))): #The expert failed
-                active[i]=False;
+            if(np.isnan(np.sum(acts[i,:,:]))==False):
+                num_demos+=1
 
-        obs, rews, dones, infos = venv.step(acts)
+        if(num_demos>=total_demos_per_round): #To avoid dropping partial trajectories
+            venv.env_method("forceDone") 
+
+        obs, rews, dones, infos = venv.step(acts) #This will call step_wait of  InteractiveTrajectoryCollector of dagger.py
+
 
         # If an environment is inactive, i.e. the episode completed for that
         # environment after `sample_until(trajectories)` was true, then we do
         # *not* want to add any subsequent trajectories from it. We avoid this
         # by just making it never done.
+        # (jtorde) But note that that env will be reset and will keep being called
+        # (jtorde) and more demos will keep being saved in the InteractiveTrajectoryCollector (venv variable in this function)-->step_wait function (see dagger.py)
         # Note that only the environments that have done==True are the ones that are finished in add_steps_and_auto_finish 
         dones &= active
 
@@ -386,13 +394,16 @@ def generate_trajectories(
         )
         trajectories.extend(new_trajs)
 
-        if sample_until(trajectories):
-            # Termination condition has been reached. Mark as inactive any environments
-            # where a trajectory was completed this timestep.
-            active &= ~dones
+        if sample_until is not None:
+            if sample_until(trajectories):
+                # Termination condition has been reached. Mark as inactive any environments
+                # where a trajectory was completed this timestep.
+                active &= ~dones
 
-    # Note that we just drop partial trajectories. This is not ideal for some
-    # algos; e.g. BC can probably benefit from partial trajectories, too.
+    # jtorde
+    # Note that all the demos are being saved in InteractiveTrajectoryCollector (venv variable in this function)-->step_wait
+    # That means that, even if len(trajectories)==0 (because none of them finished), we have already saved all the valid demos 
+    ######
 
     # Each trajectory is sampled i.i.d.; however, shorter episodes are added to
     # `trajectories` sooner. Shuffle to avoid bias in order. This is important

@@ -286,7 +286,29 @@ class InteractiveTrajectoryCollector(vec_env.VecEnvWrapper):
             dones=dones,
         )
         for traj in fresh_demos:
-            _save_dagger_demo(traj, self.save_dir)
+            np.set_printoptions(edgeitems=30, linewidth=100000, formatter={'float': lambda x: "{0:0.3f}".format(x)})
+
+            ############### (jtorde) remove the cases where the expert failed (returned nans), and the corresponding next observation
+            #Note that, the trajectory is terminated when the expert fails, then the nans will only be in the last action
+            index_last_act=traj.acts.shape[0]-1
+            has_nans=np.isnan(np.sum(traj.acts[index_last_act,:,:]));
+            if(has_nans and traj.acts.shape[0]==1):
+                continue #The expert failed the first time --> trajectory is not valid (it has only one action, which has nans)
+            elif(has_nans):
+
+                traj_to_save=types.TrajectoryWithRew(
+                                                    obs=np.delete(traj.obs,index_last_act+1, 0),
+                                                    acts=np.delete(traj.acts,index_last_act, 0),
+                                                    infos=np.delete(traj.infos,index_last_act, 0),
+                                                    terminal=traj.terminal,
+                                                    rews=np.delete(traj.rews,index_last_act, 0),
+                                                    ) #TODO: make sure the final obs is correct (see coments in add_steps_and_auto_finish() of rollout.py. Not using that obs right now)
+
+
+            else:
+                traj_to_save=traj
+            
+            _save_dagger_demo(traj_to_save, self.save_dir)
 
         return next_obs, rews, dones, infos
 
@@ -626,7 +648,7 @@ class SimpleDAggerTrainer(DAggerTrainer):
         only_collect_data=False,
         *,
         # rollout_round_min_episodes: int = 3,
-        n_traj_per_round: int = 1,
+        total_demos_per_round: int = 1,
         bc_train_kwargs: Optional[dict] = None,
     ) -> None:
         """Train the DAgger agent.
@@ -653,10 +675,7 @@ class SimpleDAggerTrainer(DAggerTrainer):
                 in multiples of `self.venv.num_envs`.
             rollout_round_min_episodes: The number of episodes the must be completed
                 completed before a dataset aggregation step ends.
-            n_traj_per_round: The number of environment timesteps that must
-                be completed before a dataset aggregation step ends. Also, that any
-                round will always train for at least `self.batch_size` timesteps,
-                because otherwise BC could fail to receive any batches.
+            total_demos_per_round: XXX
             bc_train_kwargs: Keyword arguments for calling `BC.train()`. If
                 the `log_rollouts_venv` key is not provided, then it is set to
                 `self.venv` by default. If neither of the `n_epochs` and `n_batches`
@@ -667,7 +686,7 @@ class SimpleDAggerTrainer(DAggerTrainer):
 
         while round_num < n_rounds:
 
-            if(n_traj_per_round>0):
+            if(total_demos_per_round>0):
                 collector = self.get_trajectory_collector()
                 round_episode_count = 0
                 round_timestep_count = 0
@@ -676,7 +695,7 @@ class SimpleDAggerTrainer(DAggerTrainer):
                 #     min_timesteps=max(n_traj_per_round, self.batch_size),
                 #     min_episodes=rollout_round_min_episodes,
                 # )
-                sample_until=rollout.make_min_episodes(n_traj_per_round)
+                #sample_until=rollout.make_min_episodes(n_traj_per_round)
 
                 # print(f"min_timesteps={max(n_traj_per_round, self.batch_size)}")
                 # print(f"min_episodes={rollout_round_min_episodes}")
@@ -685,7 +704,8 @@ class SimpleDAggerTrainer(DAggerTrainer):
                 trajectories = rollout.generate_trajectories(
                     policy=self.expert_policy,
                     venv=collector,
-                    sample_until=sample_until,
+                    sample_until=None,
+                    total_demos_per_round=total_demos_per_round,
                     deterministic_policy=True,
                     rng=collector.rng,
                 )
