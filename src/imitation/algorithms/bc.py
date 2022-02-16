@@ -265,6 +265,16 @@ class BC(algo_base.DemonstrationAlgorithm):
             **optimizer_kwargs,
         )
 
+        self.optimizer_nn1 = optimizer_cls(
+            self.policy.my_nn_obs2posyawtime.parameters(),
+            **optimizer_kwargs,
+        )
+
+        self.optimizer_nn2 = optimizer_cls(
+            self.policy.my_nn_pos2prob.parameters(),
+            **optimizer_kwargs,
+        )
+
         self.ent_weight = ent_weight
         self.l2_weight = l2_weight
 
@@ -392,6 +402,27 @@ class BC(algo_base.DemonstrationAlgorithm):
                     distance_yaw_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_yaw_i, student_yaw_j), dim=1)
                     distance_time_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_time_i, student_time_j), dim=1)
 
+                    # print("_________________")
+                    # print(f"expert_yaw_i={expert_yaw_i}")
+                    # print(f"student_yaw_j={student_yaw_j}")
+                    # print(f"distance_yaw_matrix[:,i,j]={distance_yaw_matrix[:,i,j]}")
+                    # print(f"________________")
+
+            # tmp_batch=0
+            # j=0;
+
+            # print(f"================")
+
+            # print(f"distance_yaw_matrix[1,:,:]=\n{distance_yaw_matrix[tmp_batch,:,:]}")
+
+            # student_yaw_j=  pred_acts[tmp_batch,0,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float()
+            # print(f"student_yaw_j={student_yaw_j}")
+
+            # for i in range(num_of_traj_per_action):
+            #         expert_yaw_i=   acts[tmp_batch,i,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float();
+            #         print(f"expert_yaw_i={expert_yaw_i}")
+            # print(f"distance_yaw_matrix[1,:,:]={distance_yaw_matrix[1,:,:]}")
+
             # print(f"expert_time_i={expert_time_i}")
             # print(f"student_time_j={student_time_j}")
             # print(f"distance_time_matrix[:,i,j]={distance_time_matrix[:,i,j]}")
@@ -447,7 +478,7 @@ class BC(algo_base.DemonstrationAlgorithm):
                         alpha_matrix[index_batch, map2RealRows[row_index], map2RealCols[col_index]]=1
                         # alpha_matrix[index_batch, row_index, col_index]=1-epsilon
 
-                # print(f"alpha_matrix={alpha_matrix}")
+                # print(f"alpha_matrix[tmp_batch,:,:]=\n{alpha_matrix[tmp_batch,:,:]}")
                 col_assigned=th.round(th.sum(alpha_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns (of the 3rd batch) have been assigned
                 col_not_assigned=(~(col_assigned.bool())).float();
                 col_assigned=col_assigned.float()
@@ -498,11 +529,25 @@ class BC(algo_base.DemonstrationAlgorithm):
 
             #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
 
-            norm_constant=(1/(batch_size*num_of_traj_per_action))
+            # norm_constant=(1/(batch_size*num_of_traj_per_action))
             num_nonzero_alpha=th.count_nonzero(alpha_matrix);
 
             #col_assigned has elements in [0,1](False/True)
-            expert_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
+            actual_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
+
+            # print(f"=============================================")
+            # print(f"student_probs={student_probs}")
+            # print(f"actual_probs={actual_probs}")
+
+            sign_student_probs=th.sign(student_probs)
+            # print(f"sign_student_probs={sign_student_probs}")
+            # print(f"actual_probs={actual_probs}")
+            diff=sign_student_probs-actual_probs;
+            # print(f"diff={diff}")
+
+            percent_right_values=(th.numel(diff)-th.count_nonzero(diff))/(th.numel(diff))
+            # print(f"num of right values ([0,1]])={num_right_values/(th.numel(diff))}")
+
             
 
             # print(f"tmp={tmp}")
@@ -518,10 +563,12 @@ class BC(algo_base.DemonstrationAlgorithm):
 
 
             pos_yaw_time_loss=th.sum(alpha_matrix*distance_matrix)/num_nonzero_alpha
-            prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, expert_probs)
+            prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, actual_probs)
             # prob_loss=(th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones)))/th.numel(student_probs) # This sum has batch_size*num_of_traj_per_action terms
 
             # print(f"prob_loss={prob_loss}")
+
+            # print(f"alpha_matrix*distance_yaw_matrix=\n{alpha_matrix*distance_yaw_matrix}")
 
             pos_loss=th.sum(alpha_matrix*distance_pos_matrix)/num_nonzero_alpha
             yaw_loss=th.sum(alpha_matrix*distance_yaw_matrix)/num_nonzero_alpha
@@ -532,7 +579,10 @@ class BC(algo_base.DemonstrationAlgorithm):
             assert time_loss.requires_grad==True
             assert prob_loss.requires_grad==True
 
-            loss=pos_loss + yaw_loss + time_loss +self.weight_prob*prob_loss;
+            loss1 = pos_loss #+ yaw_loss + time_loss
+            loss2 = self.weight_prob*prob_loss
+            loss = loss1 + loss2;
+            # loss= prob_loss;
             
             # print("loss=\n", loss)
 
@@ -545,9 +595,10 @@ class BC(algo_base.DemonstrationAlgorithm):
                 yaw_loss=yaw_loss.item(),
                 prob_loss=prob_loss.item(),
                 time_loss=time_loss.item(),
+                percent_right_values=percent_right_values.item(),
             )
 
-        return loss, stats_dict
+        return loss, stats_dict, loss1, loss2
 
 
     def train(
@@ -605,11 +656,76 @@ class BC(algo_base.DemonstrationAlgorithm):
 
         batch_num = 0
         for batch, stats_dict_it in it:
-            loss, stats_dict_loss = self._calculate_loss(batch["obs"], batch["acts"])
 
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+
+
+
+            ############################### 
+            # self.policy.my_nn_obs2posyawtime.requires_grad_(True)
+            # self.policy.my_nn_pos2prob.requires_grad_(False)
+            # for p in self.policy.my_nn_obs2posyawtime.parameters():
+            #     p.requires_grad=True
+
+            # for p in self.policy.my_nn_pos2prob.parameters():
+            #     p.requires_grad=False
+
+            ################################
+
+
+            # self.policy.my_nn_pos2prob.requires_grad_(False)
+
+            # loss, stats_dict_loss, loss1, loss2 = self._calculate_loss(batch["obs"], batch["acts"], ) #This does the forward propagation
+
+            # self.optimizer_nn1.zero_grad()          #Clears all gradients from the last step
+            # loss1.backward(retain_graph=True)   #Computes the derivative of the loss wrt the parameters
+            # self.optimizer_nn1.step()               #Causes the optimizer to take a step based on the gradients of the parameters
+
+
+            # self.policy.my_nn_pos2prob.requires_grad_(True)
+
+            # self.policy.my_nn_obs2posyawtime.requires_grad_(False)
+            # _, _, loss1, loss2 = self._calculate_loss(batch["obs"], batch["acts"], )
+            # self.optimizer_nn2.zero_grad()      #Clears all gradients from the last step
+            # loss2.backward()                #Computes the derivative of the loss wrt the parameters
+            # self.optimizer_nn2.step()           #Causes the optimizer to take a step based on the gradients of the parameters
+
+
+            # self.policy.my_nn_obs2posyawtime.requires_grad_(True)
+
+
+
+            # self.policy.my_nn_obs2posyawtime.requires_grad_(False)
+            # self.policy.my_nn_pos2prob.requires_grad_(True)
+
+            # loss, stats_dict_loss, loss1, loss2 = self._calculate_loss(batch["obs"], batch["acts"], ) #This does the forward propagation
+            # self.optimizer_nn1.zero_grad()      #Clears all gradients from the last step
+            # self.optimizer_nn2.zero_grad()      #Clears all gradients from the last step
+            # loss2.backward()                    #Computes the derivative of the loss wrt the parameters
+            # self.optimizer_nn2.step()           #Causes the optimizer to take a step based on the gradients of the parameters
+
+
+            self.policy.my_nn_obs2posyawtime.requires_grad_(True)
+            self.policy.my_nn_pos2prob.requires_grad_(False)
+
+            loss, stats_dict_loss, loss1, loss2 = self._calculate_loss(batch["obs"], batch["acts"], ) #This does the forward propagation
+            self.optimizer_nn1.zero_grad()          #Clears all gradients from the last step
+            self.optimizer_nn2.zero_grad()          #Clears all gradients from the last step
+            loss1.backward()   #Computes the derivative of the loss wrt the parameters
+            self.optimizer_nn1.step()               #Causes the optimizer to take a step based on the gradients of the parameters
+
+
+            self.policy.my_nn_obs2posyawtime.requires_grad_(True)
+            self.policy.my_nn_pos2prob.requires_grad_(True)
+
+
+            ############################### 
+            # for p in self.policy.my_nn_obs2posyawtime.parameters():
+            #     p.requires_grad=True
+
+            # for p in self.policy.my_nn_pos2prob.parameters():
+            #     p.requires_grad=True
+            ################################
+
 
             if batch_num % log_interval == 0:
                 for stats in [stats_dict_it, stats_dict_loss]:
