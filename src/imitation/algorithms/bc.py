@@ -502,8 +502,22 @@ class BC(algo_base.DemonstrationAlgorithm):
             num_nonzero_alpha=th.count_nonzero(alpha_matrix);
 
             #col_assigned has elements in [0,1](False/True)
-            expert_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
+            actual_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
             
+            ######
+            # ones=th.ones(student_probs.shape, device=used_device);
+            # actual_probs01=col_assigned.float()
+            # student_probs01 = (student_probs + ones)/2 
+            # print(f"actual_probs01={actual_probs01}")
+            # print(f"student_probs01={student_probs01}")
+            # prob_loss = -th.mean(actual_probs01*th.log(student_probs01) + (ones-actual_probs01)*th.log(ones-student_probs01))
+            # print(prob_loss)  #https://towardsdatascience.com/understanding-binary-cross-entropy-log-loss-a-visual-explanation-a3ac6025181a
+            ####
+
+
+            sign_student_probs=th.sign(student_probs)
+            diff=sign_student_probs-actual_probs;
+            percent_right_values=(th.numel(diff)-th.count_nonzero(diff))/(th.numel(diff))
 
             # print(f"tmp={tmp}")
             # print(f"alpha_matrix=\n{alpha_matrix[0,:,:]}")
@@ -518,7 +532,7 @@ class BC(algo_base.DemonstrationAlgorithm):
 
 
             pos_yaw_time_loss=th.sum(alpha_matrix*distance_matrix)/num_nonzero_alpha
-            prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, expert_probs)
+            prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, actual_probs)
             # prob_loss=(th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones)))/th.numel(student_probs) # This sum has batch_size*num_of_traj_per_action terms
 
             # print(f"prob_loss={prob_loss}")
@@ -545,6 +559,7 @@ class BC(algo_base.DemonstrationAlgorithm):
                 yaw_loss=yaw_loss.item(),
                 prob_loss=prob_loss.item(),
                 time_loss=time_loss.item(),
+                percent_right_values=percent_right_values.item(),
             )
 
         return loss, stats_dict
@@ -610,6 +625,9 @@ class BC(algo_base.DemonstrationAlgorithm):
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+
+            # print(f"batch_num={batch_num}")
+            # print(f"log_interval={log_interval}")
 
             if batch_num % log_interval == 0:
                 for stats in [stats_dict_it, stats_dict_loss]:
