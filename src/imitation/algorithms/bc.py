@@ -372,11 +372,14 @@ class BC(algo_base.DemonstrationAlgorithm):
             distance_yaw_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
             distance_time_matrix= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
 
+            distance_pos_matrix_within_expert= th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device); 
+
+
             for i in range(num_of_traj_per_action):
                 for j in range(num_of_traj_per_action):
 
-                    expert_i=       acts[:,i,0:-1].float(); #All the elements but the last one
-                    student_j=      pred_acts[:,j,0:-1].float() #All the elements but the last one
+                    expert_i=       acts[:,i,:].float(); #All the elements
+                    student_j=      pred_acts[:,j,:].float() #All the elements
 
                     expert_pos_i=   acts[:,i,0:self.traj_size_pos_ctrl_pts].float();
                     student_pos_j=  pred_acts[:,j,0:self.traj_size_pos_ctrl_pts].float()
@@ -384,13 +387,26 @@ class BC(algo_base.DemonstrationAlgorithm):
                     expert_yaw_i=   acts[:,i,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float();
                     student_yaw_j=  pred_acts[:,j,self.traj_size_pos_ctrl_pts:(self.traj_size_pos_ctrl_pts+self.traj_size_yaw_ctrl_pts)].float()
 
-                    expert_time_i=       acts[:,i,-2:-1].float(); #Time. Note: Is you use only -2 (instead of -2:-1), then distance_time_matrix will have required_grad to false
-                    student_time_j=      pred_acts[:,j,-2:-1].float() #Time. Note: Is you use only -2 (instead of -2:-1), then distance_time_matrix will have required_grad to false
+                    expert_time_i=       acts[:,i,-1:].float(); #Time. Note: Is you use only -1 (instead of -1:), then distance_time_matrix will have required_grad to false
+                    student_time_j=      pred_acts[:,j,-1:].float() #Time. Note: Is you use only -1 (instead of -1:), then distance_time_matrix will have required_grad to false
 
                     distance_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_i, student_j), dim=1)
                     distance_pos_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_pos_i, student_pos_j), dim=1)
                     distance_yaw_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_yaw_i, student_yaw_j), dim=1)
                     distance_time_matrix[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_time_i, student_time_j), dim=1)
+
+
+                    #This is simply to delete the trajs from the expert that are repeated
+                    expert_pos_j=   acts[:,j,0:self.traj_size_pos_ctrl_pts].float();
+                    distance_pos_matrix_within_expert[:,i,j]=th.mean(th.nn.MSELoss(reduction='none')(expert_pos_i, expert_pos_j), dim=1)
+
+
+            is_repeated=th.zeros(batch_size, num_of_traj_per_action, dtype=th.bool, device=used_device)
+
+
+            for i in range(num_of_traj_per_action):
+                for j in range(i+1, num_of_traj_per_action):
+                    is_repeated[:,j]=th.logical_or(is_repeated[:,j], th.lt(distance_pos_matrix_within_expert[:,i,j], 1e-7))
 
             # print(f"expert_time_i={expert_time_i}")
             # print(f"student_time_j={student_time_j}")
@@ -433,8 +449,9 @@ class BC(algo_base.DemonstrationAlgorithm):
 
                     rows_to_delete=[]
                     for i in range(num_of_traj_per_action):
-                        expert_prob=th.round(acts[index_batch, i, -1]) #this should be either 1 or -1
-                        if(expert_prob==-1): 
+                        # expert_prob=th.round(acts[index_batch, i, -1]) #this should be either 1 or -1
+                        # if(expert_prob==-1): 
+                        if(is_repeated[index_batch,i]==True): 
                             #Delete that row
                             rows_to_delete.append(i)
 
@@ -481,8 +498,8 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print(f"alpha_matrix.device={alpha_matrix.device}")
             # print(f"===============")
             # print(f"student_probs.device= {student_probs.device}")
-            student_probs=pred_acts[:,:,-1]
-            ones=th.ones(student_probs.shape, device=used_device)
+            # student_probs=pred_acts[:,:,-1]
+            # ones=th.ones(student_probs.shape, device=used_device)
             # print(f"tmp.device= {tmp.device}")
             # print(f"col_assigned.device= {col_assigned.device}")
             #Elementwise mult, see https://stackoverflow.com/questions/53369667/pytorch-element-wise-product-of-vectors-matrices-tensors
@@ -491,18 +508,18 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print("col_assigned=\n", col_assigned)
             # print("uno=\n", col_assigned*th.nn.MSELoss(reduction='none')(student_probs,tmp))
             # print("dos=\n", col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp))
-            assert (distance_matrix.shape)[0]==(student_probs.shape)[0], f"Wrong shape!, distance_matrix.shape={distance_matrix.shape}, student_probs.shape={student_probs.shape}"
-            assert (distance_matrix.shape)[1]==(student_probs.shape)[1], f"Wrong shape!, distance_matrix.shape={distance_matrix.shape}, student_probs.shape={student_probs.shape}"
+            # assert (distance_matrix.shape)[0]==(student_probs.shape)[0], f"Wrong shape!, distance_matrix.shape={distance_matrix.shape}, student_probs.shape={student_probs.shape}"
+            # assert (distance_matrix.shape)[1]==(student_probs.shape)[1], f"Wrong shape!, distance_matrix.shape={distance_matrix.shape}, student_probs.shape={student_probs.shape}"
             assert (distance_matrix.shape)[0]==batch_size, "Wrong shape!"
             assert (distance_matrix.shape)[1]==num_of_traj_per_action, "Wrong shape!"
 
             #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
 
-            norm_constant=(1/(batch_size*num_of_traj_per_action))
+            # norm_constant=(1/(batch_size*num_of_traj_per_action))
             num_nonzero_alpha=th.count_nonzero(alpha_matrix);
 
             #col_assigned has elements in [0,1](False/True)
-            actual_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
+            # actual_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
             
             ######
             # ones=th.ones(student_probs.shape, device=used_device);
@@ -515,9 +532,9 @@ class BC(algo_base.DemonstrationAlgorithm):
             ####
 
 
-            sign_student_probs=th.sign(student_probs)
-            diff=sign_student_probs-actual_probs;
-            percent_right_values=(th.numel(diff)-th.count_nonzero(diff))/(th.numel(diff))
+            # sign_student_probs=th.sign(student_probs)
+            # diff=sign_student_probs-actual_probs;
+            # percent_right_values=(th.numel(diff)-th.count_nonzero(diff))/(th.numel(diff))
 
             # print(f"tmp={tmp}")
             # print(f"alpha_matrix=\n{alpha_matrix[0,:,:]}")
@@ -531,8 +548,8 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print("loss assignment=\n",col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones))
 
 
-            pos_yaw_time_loss=th.sum(alpha_matrix*distance_matrix)/num_nonzero_alpha
-            prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, actual_probs)
+            # pos_yaw_time_loss=th.sum(alpha_matrix*distance_matrix)/num_nonzero_alpha
+            # prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, actual_probs)
             # prob_loss=(th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones)))/th.numel(student_probs) # This sum has batch_size*num_of_traj_per_action terms
 
             # print(f"prob_loss={prob_loss}")
@@ -544,9 +561,9 @@ class BC(algo_base.DemonstrationAlgorithm):
             assert pos_loss.requires_grad==True
             assert yaw_loss.requires_grad==True
             assert time_loss.requires_grad==True
-            assert prob_loss.requires_grad==True
+            # assert prob_loss.requires_grad==True
 
-            loss=pos_loss + yaw_loss + time_loss +self.weight_prob*prob_loss;
+            loss=10.0*pos_loss + yaw_loss + time_loss # +self.weight_prob*prob_loss;
             
             # print("loss=\n", loss)
 
@@ -557,9 +574,9 @@ class BC(algo_base.DemonstrationAlgorithm):
                 loss=loss.item(),
                 pos_loss=pos_loss.item(),
                 yaw_loss=yaw_loss.item(),
-                prob_loss=prob_loss.item(),
+                # prob_loss=prob_loss.item(),
                 time_loss=time_loss.item(),
-                percent_right_values=percent_right_values.item(),
+                # percent_right_values=percent_right_values.item(),
             )
 
         return loss, stats_dict
