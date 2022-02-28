@@ -563,7 +563,7 @@ class BC(algo_base.DemonstrationAlgorithm):
             assert time_loss.requires_grad==True
             # assert prob_loss.requires_grad==True
 
-            loss=10.0*pos_loss + yaw_loss + time_loss # +self.weight_prob*prob_loss;
+            loss=pos_loss + yaw_loss + time_loss # +self.weight_prob*prob_loss;
             
             # print("loss=\n", loss)
 
