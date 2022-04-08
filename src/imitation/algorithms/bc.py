@@ -202,6 +202,7 @@ class BC(algo_base.DemonstrationAlgorithm):
         custom_logger: Optional[logger.HierarchicalLogger] = None,
         traj_size_pos_ctrl_pts = None,
         traj_size_yaw_ctrl_pts = None,
+        use_closed_form_yaw_student = False,
         weight_prob=0.01
     ):
         """Builds BC.
@@ -230,6 +231,7 @@ class BC(algo_base.DemonstrationAlgorithm):
         """
         self.traj_size_pos_ctrl_pts=traj_size_pos_ctrl_pts;
         self.traj_size_yaw_ctrl_pts=traj_size_yaw_ctrl_pts;
+        self.use_closed_form_yaw_student=use_closed_form_yaw_student
         self.weight_prob=weight_prob;
         self.batch_size = batch_size
         super().__init__(
@@ -563,7 +565,10 @@ class BC(algo_base.DemonstrationAlgorithm):
             assert time_loss.requires_grad==True
             # assert prob_loss.requires_grad==True
 
-            loss=pos_loss + yaw_loss + time_loss # +self.weight_prob*prob_loss;
+            loss=pos_loss +  time_loss#  + yaw_loss
+
+            if(self.use_closed_form_yaw_student==False):
+                loss = loss + yaw_loss
             
             # print("loss=\n", loss)
 
