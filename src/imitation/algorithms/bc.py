@@ -203,6 +203,7 @@ class BC(algo_base.DemonstrationAlgorithm):
         traj_size_pos_ctrl_pts = None,
         traj_size_yaw_ctrl_pts = None,
         use_closed_form_yaw_student = False,
+        use_Hungarian = True,
         weight_prob=0.01
     ):
         """Builds BC.
@@ -232,6 +233,7 @@ class BC(algo_base.DemonstrationAlgorithm):
         self.traj_size_pos_ctrl_pts=traj_size_pos_ctrl_pts;
         self.traj_size_yaw_ctrl_pts=traj_size_yaw_ctrl_pts;
         self.use_closed_form_yaw_student=use_closed_form_yaw_student
+        self.use_Hungarian=use_Hungarian
         self.weight_prob=weight_prob;
         self.batch_size = batch_size
         super().__init__(
@@ -406,6 +408,7 @@ class BC(algo_base.DemonstrationAlgorithm):
             is_repeated=th.zeros(batch_size, num_of_traj_per_action, dtype=th.bool, device=used_device)
 
 
+
             for i in range(num_of_traj_per_action):
                 for j in range(i+1, num_of_traj_per_action):
                     is_repeated[:,j]=th.logical_or(is_repeated[:,j], th.lt(distance_pos_matrix_within_expert[:,i,j], 1e-7))
@@ -436,21 +439,32 @@ class BC(algo_base.DemonstrationAlgorithm):
             #distance_matrix[:,i,j] is a vector of batch_size elements
             # print("distance_pos_matrix=\n", distance_pos_matrix)
 
+            #Option 1: Solve assignment problem
+            A_matrix=th.ones(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device);
 
-            alpha_matrix=th.ones(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device);
+            #Option 2 Winner takes all
+            A_WTA_matrix=th.ones(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device);
+            
             distance_pos_matrix_numpy=distance_pos_matrix.cpu().detach().numpy();
 
             if(num_of_traj_per_action>1):
 
                 #Option 1: Solve assignment problem
-                alpha_matrix=th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device);
-                for index_batch in range(batch_size): 
-                    cost_matrix=distance_pos_matrix_numpy[index_batch,:,:];
+                A_matrix=th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device);
+
+                #Option 2: Winner takes all
+                # A_WTA_matrix=th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device, requires_grad=True);
+                A_WTA_matrix=distance_pos_matrix.clone();
+
+                for index_batch in range(batch_size):         
+
+                    # cost_matrix_numpy=distance_pos_matrix_numpy[index_batch,:,:];
+                    cost_matrix=distance_pos_matrix[index_batch,:,:];
                     map2RealRows=np.array(range(num_of_traj_per_action))
                     map2RealCols=np.array(range(num_of_traj_per_action))
 
                     rows_to_delete=[]
-                    for i in range(num_of_traj_per_action):
+                    for i in range(num_of_traj_per_action): #for each row (expert traj)
                         # expert_prob=th.round(acts[index_batch, i, -1]) #this should be either 1 or -1
                         # if(expert_prob==-1): 
                         if(is_repeated[index_batch,i]==True): 
@@ -458,38 +472,188 @@ class BC(algo_base.DemonstrationAlgorithm):
                             rows_to_delete.append(i)
 
                     # print(f"Deleting index_batch={index_batch}, rows_to_delete={rows_to_delete}")
-                    cost_matrix=np.delete(cost_matrix, rows_to_delete, axis=0)
+                    # cost_matrix_numpy=np.delete(cost_matrix_numpy, rows_to_delete, axis=0)
+                    cost_matrix=cost_matrix[is_repeated[index_batch,:]==False]   #np.delete(cost_matrix_numpy, rows_to_delete, axis=0)
+                    cost_matrix_numpy=cost_matrix.cpu().detach().numpy()
+
+
+
+                    #########################################################################
+                    #Option 2 Winner takes all: Eq.6 of https://arxiv.org/pdf/2110.05113.pdfs
+                    #########################################################################
+                    num_diff_traj_expert=cost_matrix.shape[0]
+
+                    minimum_per_column, indices =th.min(distance_pos_matrix[index_batch,:,:], 0)
+
+                    tmp=minimum_per_column.repeat(A_WTA_matrix.shape[2],1)
+                    # print(f"minimum_per_column={minimum_per_column}")
+                    # print(f"tmp={tmp}")
+                    # print(f"indices={indices}")
+
+                    epsilon=0.05
+
+                    A_WTA_matrix[index_batch,:,:]=A_WTA_matrix[index_batch,:,:].clone()/tmp
+                    if(num_diff_traj_expert>1):
+                        A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]>1] = (epsilon/(num_diff_traj_expert-1))
+                    A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]==1] = 1-epsilon
+                    A_WTA_matrix[index_batch,is_repeated[index_batch,:],:] = 0.0
+
+                    # novale=th.sum(A_WTA_matrix[index_batch,:,:])
+                    ######################################
+
+                    # print("This should be zero", cost_matrix.cpu().detach().numpy() - cost_matrix_numpy)
+
                     map2RealRows=np.delete(map2RealRows, rows_to_delete, axis=0)
 
-                    row_indexes, col_indexes = linear_sum_assignment(cost_matrix)
-                    for row_index, col_index in zip(row_indexes, col_indexes):
-                        alpha_matrix[index_batch, map2RealRows[row_index], map2RealCols[col_index]]=1
-                        # alpha_matrix[index_batch, row_index, col_index]=1-epsilon
 
-                # print(f"alpha_matrix={alpha_matrix}")
-                col_assigned=th.round(th.sum(alpha_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns (of the 3rd batch) have been assigned
+                    #########################################################################
+                    #Option 1 Solve assignment problem                                       
+                    #########################################################################
+                    row_indexes, col_indexes = linear_sum_assignment(cost_matrix_numpy)
+                    for row_index, col_index in zip(row_indexes, col_indexes):
+                        A_matrix[index_batch, map2RealRows[row_index], map2RealCols[col_index]]=1
+                    
+                    # print(f"distance_pos_matrix_within_expert=\n{distance_pos_matrix_within_expert[index_batch,:,:]}")
+                    # print(f"is_repeated=\n{is_repeated[index_batch,:]}")
+                    # print(f"A_matrix[index_batch,:,:]=\n{A_matrix[index_batch,:,:]}")
+
+                    #########################################################################
+                    #Option 2 Winner takes all: Eq.6 of https://arxiv.org/pdf/2110.05113.pdfs
+                    #########################################################################
+
+                    # print(f"cost matrix.shape={cost_matrix.shape}")
+
+
+                    # 
+
+                    # print(f"cost matrix={cost_matrix}")
+
+                    # for j in range(num_of_traj_per_action): #for each column (student traj)
+
+                    #    # get minimum of the column and assign 1-epsilon to it
+                    #    # print("distance_pos_matrix[:,j]= ", distance_pos_matrix[:,j])
+                    #    (min_value, argmin_index_row)=th.min(cost_matrix[:,j], dim=0) 
+
+                    #    print(f"The minimum of column {j} is {argmin_index_row}")
+
+
+                    #    # print("argmin_index_row= ", argmin_index_row)
+                    #    A_WTA_matrix[index_batch, map2RealRows[argmin_index_row],j]=1-epsilon
+
+                    #    #Assign (epsilon/(num_diff_traj_expert-1)) to the rest of the rows
+                    #    for i in range(cost_matrix.shape[0]):
+                    #       if(i==argmin_index_row):
+                    #         continue
+                    #       A_WTA_matrix[index_batch, map2RealRows[i],j]=(epsilon/(num_diff_traj_expert-1))
+
+
+                # print(f"distance_pos_matrix=\n{distance_pos_matrix}\n\n\n\n")
+                # print(f"A_matrix=\n{A_matrix}\n\n\n\n")
+                # print(f"A_WTA_matrix=\n{A_WTA_matrix}")
+                # print(f"=====================================")
+                # print(f"=====================================")
+
+                col_assigned=th.round(th.sum(A_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns (of the 3rd batch) have been assigned
                 col_not_assigned=(~(col_assigned.bool())).float();
                 col_assigned=col_assigned.float()
 
                 #Option 3: simply the identity matrix
                 # x = th.eye(num_of_traj_per_action)
                 # x = x.reshape((1, num_of_traj_per_action, num_of_traj_per_action))
-                # alpha_matrix = x.repeat(batch_size, 1, 1)
+                # A_matrix = x.repeat(batch_size, 1, 1)
 
-                # print("alpha_matrix=\n", alpha_matrix)
+                # print("A_matrix=\n", A_matrix)
 
-                #Option 2: Eq.6 of https://arxiv.org/pdf/2110.05113.pdfs
-                # epsilon=0.05
-                # alpha_matrix=(epsilon/(num_of_traj_per_action-1)) * alpha_matrix;
+                #########################################################################
+                #Option 2 Winner takes all: Eq.6 of https://arxiv.org/pdf/2110.05113.pdfs
+                #########################################################################
+                
+                # A_WTA_matrix=(epsilon/(num_of_traj_per_action-1)) * A_WTA_matrix;
                 # for index_batch in range(batch_size): 
                 #    for j in range(num_of_traj_per_action): #for each column (student traj)
                 #        # get minimum of the column and assign 1-epsilon to it
                 #        # print("distance_pos_matrix[:,j]= ", distance_pos_matrix[:,j])
                 #        (min_value, argmin_index_row)=th.min(distance_pos_matrix[index_batch,:,j], dim=0) 
                 #        # print("argmin_index_row= ", argmin_index_row)
-                #        alpha_matrix[index_batch, argmin_index_row,j]=1-epsilon
+                #        A_WTA_matrix[index_batch, argmin_index_row,j]=1-epsilon
 
-            # print("alpha_matrix=\n", alpha_matrix)
+
+
+
+
+            #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
+
+            # print(f"A_matrix={A_matrix}")
+
+            # norm_constant=(1/(batch_size*num_of_traj_per_action))
+            num_nonzero_A=th.count_nonzero(A_matrix); #This is the same as the number of distinct trajectories produced by the expert
+
+            # print(f"num_nonzero_A={num_nonzero_A}")
+            # print(f"num_of_traj_per_action*batch_size={num_of_traj_per_action*batch_size}")
+
+
+            # #Note that     num_of_traj_per_action*batch_size == num_nonzero_A == columns of A*batch_size
+            # assert (distance_matrix.shape)[1]==num_of_traj_per_action, "Wrong shape!"
+            # assert num_nonzero_A==num_of_traj_per_action*batch_size, "These shold be the same (since A has rows<=columns)"
+
+            # scaling=num_of_traj_per_action*batch_size
+
+
+            pos_loss=th.sum(A_matrix*distance_pos_matrix)/num_nonzero_A
+            yaw_loss=th.sum(A_matrix*distance_yaw_matrix)/num_nonzero_A
+            time_loss=th.sum(A_matrix*distance_time_matrix)/num_nonzero_A
+
+            pos_loss_WTA=th.sum(A_WTA_matrix*distance_pos_matrix)/num_nonzero_A
+            yaw_loss_WTA=th.sum(A_WTA_matrix*distance_yaw_matrix)/num_nonzero_A
+            time_loss_WTA=th.sum(A_WTA_matrix*distance_time_matrix)/num_nonzero_A
+
+            assert (distance_matrix.shape)[0]==batch_size, "Wrong shape!"
+            assert (distance_matrix.shape)[1]==num_of_traj_per_action, "Wrong shape!"
+            assert pos_loss.requires_grad==True
+            assert yaw_loss.requires_grad==True
+            assert time_loss.requires_grad==True
+
+            assert pos_loss_WTA.requires_grad==True
+            assert yaw_loss_WTA.requires_grad==True
+            assert time_loss_WTA.requires_grad==True
+            assert A_WTA_matrix.requires_grad==True
+
+            # assert prob_loss.requires_grad==True
+
+            loss_Hungarian=pos_loss +  time_loss#  + yaw_loss
+
+            loss_WTA = pos_loss_WTA + time_loss_WTA
+
+            if(self.use_closed_form_yaw_student==False):
+                loss_Hungarian = loss_Hungarian + yaw_loss
+                loss_WTA = loss_WTA + yaw_loss_WTA
+
+            if(self.use_Hungarian):
+                loss=loss_Hungarian
+            else:
+                loss=loss_WTA
+
+            
+            # print("loss=\n", loss)
+
+            # print("loss=\n ",loss)
+
+            ##########################
+            stats_dict = dict(
+                loss=loss.item(),
+                loss_WTA=loss_WTA.item(),
+                loss_Hungarian=loss_Hungarian.item(),
+                pos_loss=pos_loss.item(),
+                yaw_loss=yaw_loss.item(),
+                # prob_loss=prob_loss.item(),
+                time_loss=time_loss.item(),
+                # percent_right_values=percent_right_values.item(),
+            )
+
+        return loss, stats_dict
+
+            # OLD STUFF
+            # print("A_matrix=\n", A_matrix)
             # print(f"col_assigned=\n {col_assigned}")
             # print(f"col_not_assigned=\n {col_not_assigned}")
 
@@ -497,7 +661,7 @@ class BC(algo_base.DemonstrationAlgorithm):
 
             # print(f"===============")
             # print(f"distance_pos_matrix.device={distance_pos_matrix.device}")
-            # print(f"alpha_matrix.device={alpha_matrix.device}")
+            # print(f"A_matrix.device={A_matrix.device}")
             # print(f"===============")
             # print(f"student_probs.device= {student_probs.device}")
             # student_probs=pred_acts[:,:,-1]
@@ -512,13 +676,6 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print("dos=\n", col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-tmp))
             # assert (distance_matrix.shape)[0]==(student_probs.shape)[0], f"Wrong shape!, distance_matrix.shape={distance_matrix.shape}, student_probs.shape={student_probs.shape}"
             # assert (distance_matrix.shape)[1]==(student_probs.shape)[1], f"Wrong shape!, distance_matrix.shape={distance_matrix.shape}, student_probs.shape={student_probs.shape}"
-            assert (distance_matrix.shape)[0]==batch_size, "Wrong shape!"
-            assert (distance_matrix.shape)[1]==num_of_traj_per_action, "Wrong shape!"
-
-            #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
-
-            # norm_constant=(1/(batch_size*num_of_traj_per_action))
-            num_nonzero_alpha=th.count_nonzero(alpha_matrix);
 
             #col_assigned has elements in [0,1](False/True)
             # actual_probs = 2*col_assigned.float() - 1*th.ones(col_assigned.shape, device=used_device) #This forces all the elements to be in [-1,1]
@@ -539,8 +696,8 @@ class BC(algo_base.DemonstrationAlgorithm):
             # percent_right_values=(th.numel(diff)-th.count_nonzero(diff))/(th.numel(diff))
 
             # print(f"tmp={tmp}")
-            # print(f"alpha_matrix=\n{alpha_matrix[0,:,:]}")
-            # print(f"num_nonzero_alpha={th.count_nonzero(alpha_matrix[0,:,:])}")
+            # print(f"A_matrix=\n{A_matrix[0,:,:]}")
+            # print(f"num_nonzero_A={th.count_nonzero(A_matrix[0,:,:])}")
 
             # print("col_assigned=\n", col_assigned)
             # print("col_not_assigned=\n", col_not_assigned)
@@ -550,41 +707,11 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print("loss assignment=\n",col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones))
 
 
-            # pos_yaw_time_loss=th.sum(alpha_matrix*distance_matrix)/num_nonzero_alpha
+            # pos_yaw_time_loss=th.sum(A_matrix*distance_matrix)/num_nonzero_A
             # prob_loss=th.nn.MSELoss(reduction='mean')(student_probs, actual_probs)
             # prob_loss=(th.sum(col_assigned*th.nn.MSELoss(reduction='none')(student_probs,ones) + col_not_assigned*th.nn.MSELoss(reduction='none')(student_probs,-ones)))/th.numel(student_probs) # This sum has batch_size*num_of_traj_per_action terms
 
             # print(f"prob_loss={prob_loss}")
-
-            pos_loss=th.sum(alpha_matrix*distance_pos_matrix)/num_nonzero_alpha
-            yaw_loss=th.sum(alpha_matrix*distance_yaw_matrix)/num_nonzero_alpha
-            time_loss=th.sum(alpha_matrix*distance_time_matrix)/num_nonzero_alpha
-
-            assert pos_loss.requires_grad==True
-            assert yaw_loss.requires_grad==True
-            assert time_loss.requires_grad==True
-            # assert prob_loss.requires_grad==True
-
-            loss=pos_loss +  time_loss#  + yaw_loss
-
-            if(self.use_closed_form_yaw_student==False):
-                loss = loss + yaw_loss
-            
-            # print("loss=\n", loss)
-
-            # print("loss=\n ",loss)
-
-            ##########################
-            stats_dict = dict(
-                loss=loss.item(),
-                pos_loss=pos_loss.item(),
-                yaw_loss=yaw_loss.item(),
-                # prob_loss=prob_loss.item(),
-                time_loss=time_loss.item(),
-                # percent_right_values=percent_right_values.item(),
-            )
-
-        return loss, stats_dict
 
 
     def train(
