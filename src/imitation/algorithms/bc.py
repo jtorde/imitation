@@ -20,7 +20,7 @@ from imitation.util import logger
 
 from scipy.optimize import linear_sum_assignment
 import math
-
+import re
 
 def reconstruct_policy(
     policy_path: str,
@@ -204,7 +204,9 @@ class BC(algo_base.DemonstrationAlgorithm):
         traj_size_yaw_ctrl_pts = None,
         use_closed_form_yaw_student = False,
         use_Hungarian = True,
-        weight_prob=0.01
+        weight_prob=0.01,
+        only_test_loss=False,
+        epsilon_WTA=0.05
     ):
         """Builds BC.
 
@@ -236,6 +238,8 @@ class BC(algo_base.DemonstrationAlgorithm):
         self.use_Hungarian=use_Hungarian
         self.weight_prob=weight_prob;
         self.batch_size = batch_size
+        self.only_test_loss = only_test_loss
+        self.epsilon_WTA = epsilon_WTA
         super().__init__(
             demonstrations=demonstrations,
             custom_logger=custom_logger,
@@ -483,20 +487,60 @@ class BC(algo_base.DemonstrationAlgorithm):
                     #########################################################################
                     num_diff_traj_expert=cost_matrix.shape[0]
 
-                    minimum_per_column, indices =th.min(distance_pos_matrix[index_batch,:,:], 0)
 
-                    tmp=minimum_per_column.repeat(A_WTA_matrix.shape[2],1)
-                    # print(f"minimum_per_column={minimum_per_column}")
-                    # print(f"tmp={tmp}")
-                    # print(f"indices={indices}")
+                    distance_pos_matrix_batch_tmp=distance_pos_matrix[index_batch,:,:].clone();
+                    distance_pos_matrix_batch_tmp[is_repeated[index_batch,:],:] = float('inf')  #Set the ones that are repeated to infinity
 
-                    epsilon=0.05
+                    minimum_per_column, row_indexes =th.min(distance_pos_matrix_batch_tmp[:,:], 0) #Select the minimum values
 
-                    A_WTA_matrix[index_batch,:,:]=A_WTA_matrix[index_batch,:,:].clone()/tmp
+
+                    col_indexes=th.range(0, cost_matrix.shape[1], dtype=th.int64)
+
                     if(num_diff_traj_expert>1):
-                        A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]>1] = (epsilon/(num_diff_traj_expert-1))
-                    A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]==1] = 1-epsilon
-                    A_WTA_matrix[index_batch,is_repeated[index_batch,:],:] = 0.0
+                        A_WTA_matrix[index_batch,:,:]= (self.epsilon_WTA/(num_diff_traj_expert-1))
+
+
+                    for row_index, col_index in zip(row_indexes, col_indexes):
+                        if(num_diff_traj_expert>1):
+                            value=1-self.epsilon_WTA
+                        else:
+                            value=1.0
+                        
+                        A_WTA_matrix[index_batch, row_index, col_index]=value
+
+
+
+                    A_WTA_matrix[index_batch,is_repeated[index_batch,:],:] = th.zeros_like(A_WTA_matrix[index_batch,is_repeated[index_batch,:],:])
+
+ 
+
+                    #assert
+                    should_be_ones=th.sum(A_WTA_matrix[index_batch,:,:], dim=0)
+                    tmp=th.isclose(should_be_ones, th.ones_like(should_be_ones))
+                    assert th.all(tmp)
+
+                    # A_WTA_matrix[index_batch,indices,:]= (1-self.epsilon_WTA)*th.ones_like(A_WTA_matrix[index_batch,indices,:])
+
+                    # print(f"A_WTA_matrix HERE=\n{A_WTA_matrix[index_batch,:,:]}")
+
+
+                    # if(index_batch==0):
+                    #     print(f"minimum_per_column={minimum_per_column}")
+                    #     print(f"indices={indices}")
+
+
+                    # tmp=minimum_per_column.repeat(A_WTA_matrix.shape[2],1)
+                    # # print(f"minimum_per_column={minimum_per_column}")
+                    # # print(f"tmp={tmp}")
+
+                    # A_WTA_matrix[index_batch,:,:]=A_WTA_matrix[index_batch,:,:].clone()/tmp
+
+                    # if(index_batch==0):
+                    #     print(f"A_WTA_matrix before=\n{A_WTA_matrix[index_batch,:,:]}")
+
+                    # if(num_diff_traj_expert>1):
+                    #     A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]>1] = (self.epsilon_WTA/(num_diff_traj_expert-1))
+                    # A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]==1] = 1-self.epsilon_WTA
 
                     # novale=th.sum(A_WTA_matrix[index_batch,:,:])
                     ######################################
@@ -547,15 +591,17 @@ class BC(algo_base.DemonstrationAlgorithm):
                     #       A_WTA_matrix[index_batch, map2RealRows[i],j]=(epsilon/(num_diff_traj_expert-1))
 
 
-                # print(f"distance_pos_matrix=\n{distance_pos_matrix}\n\n\n\n")
-                # print(f"A_matrix=\n{A_matrix}\n\n\n\n")
-                # print(f"A_WTA_matrix=\n{A_WTA_matrix}")
+                # print(f"\n\n\n=======================================")
+                # print(f"distance_pos_matrix=\n{distance_pos_matrix[0,:,:]*10000}\n")
+                # print(f"is_repeated=\n{is_repeated[0,:]}\n")
+                # print(f"A_matrix=\n{A_matrix[0,:,:]}\n")
+                # print(f"A_WTA_matrix=\n{A_WTA_matrix[0,:,:]}")
                 # print(f"=====================================")
                 # print(f"=====================================")
 
-                col_assigned=th.round(th.sum(A_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns (of the 3rd batch) have been assigned
-                col_not_assigned=(~(col_assigned.bool())).float();
-                col_assigned=col_assigned.float()
+                # col_assigned=th.round(th.sum(A_matrix, dim=1)); #Example: col_assigned[2,:,:]=[0 0 1 0 1 0] means that the 3rd and 5th columns (of the 3rd batch) have been assigned
+                # col_not_assigned=(~(col_assigned.bool())).float();
+                # col_assigned=col_assigned.float()
 
                 #Option 3: simply the identity matrix
                 # x = th.eye(num_of_traj_per_action)
@@ -580,6 +626,8 @@ class BC(algo_base.DemonstrationAlgorithm):
 
 
 
+            # print(f"Using epsilon={self.epsilon_WTA}")
+
 
             #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
 
@@ -602,6 +650,9 @@ class BC(algo_base.DemonstrationAlgorithm):
             pos_loss=th.sum(A_matrix*distance_pos_matrix)/num_nonzero_A
             yaw_loss=th.sum(A_matrix*distance_yaw_matrix)/num_nonzero_A
             time_loss=th.sum(A_matrix*distance_time_matrix)/num_nonzero_A
+
+            # print(f"pos_loss=\n{pos_loss*10000}")
+            # print(f"num_nonzero_A={num_nonzero_A}")
 
             pos_loss_WTA=th.sum(A_WTA_matrix*distance_pos_matrix)/num_nonzero_A
             yaw_loss_WTA=th.sum(A_WTA_matrix*distance_yaw_matrix)/num_nonzero_A
@@ -649,6 +700,28 @@ class BC(algo_base.DemonstrationAlgorithm):
                 time_loss=time_loss.item(),
                 # percent_right_values=percent_right_values.item(),
             )
+
+
+            # print(A_matrix*distance_pos_matrix)
+
+            tmp=th.sum(A_matrix*distance_pos_matrix, dim=2)
+
+            tmp[tmp==0.0]=th.nan
+
+            # print(f"tmp before sorting=\n{tmp}")
+
+            for index_batch in range(batch_size):
+                my_sorted, indices=th.sort(tmp[index_batch,:], dim=0) #Note that if there is nans, they will be at the end of my_sorted
+                # print(f"my_sorted={my_sorted}")
+                tmp[index_batch,:]=my_sorted
+
+            # print(f"tmp after sorting=\n{tmp}")
+
+            for i in range(num_of_traj_per_action):
+                stats_dict["pos_loss_"+str(i)]=th.nanmean(tmp[:,i]).item()
+
+
+            # print(stats_dict)
 
         return loss, stats_dict
 
@@ -768,12 +841,19 @@ class BC(algo_base.DemonstrationAlgorithm):
             self.tensorboard_step = 0
 
         batch_num = 0
+
+        if(self.only_test_loss):
+            final_policy_path=re.sub(r'intermediate.*.pt', 'final_policy.pt', save_full_policy_path)   #save_full_policy_path.replace("intermediate", "final")
+            print(f"Going to load policy {final_policy_path}")
+            self._policy=reconstruct_policy(final_policy_path)
+
         for batch, stats_dict_it in it:
             loss, stats_dict_loss = self._calculate_loss(batch["obs"], batch["acts"])
 
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            if(self.only_test_loss==False):
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
 
             # print(f"batch_num={batch_num}")
             # print(f"log_interval={log_interval}")
