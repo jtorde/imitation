@@ -458,7 +458,8 @@ class BC(algo_base.DemonstrationAlgorithm):
 
                 #Option 2: Winner takes all
                 # A_WTA_matrix=th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device, requires_grad=True);
-                A_WTA_matrix=distance_pos_matrix.clone();
+                # A_WTA_matrix=distance_pos_matrix.clone();
+                A_WTA_matrix=th.zeros_like(distance_pos_matrix)
 
                 for index_batch in range(batch_size):         
 
@@ -667,7 +668,7 @@ class BC(algo_base.DemonstrationAlgorithm):
             assert pos_loss_WTA.requires_grad==True
             assert yaw_loss_WTA.requires_grad==True
             assert time_loss_WTA.requires_grad==True
-            assert A_WTA_matrix.requires_grad==True
+            # assert A_WTA_matrix.requires_grad==True
 
             # assert prob_loss.requires_grad==True
 
