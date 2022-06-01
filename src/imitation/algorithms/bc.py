@@ -203,10 +203,10 @@ class BC(algo_base.DemonstrationAlgorithm):
         traj_size_pos_ctrl_pts = None,
         traj_size_yaw_ctrl_pts = None,
         use_closed_form_yaw_student = False,
-        use_Hungarian = True,
+        type_loss = "Hung",
         weight_prob=0.01,
         only_test_loss=False,
-        epsilon_WTA=0.05
+        epsilon_RWTA=0.05
     ):
         """Builds BC.
 
@@ -235,11 +235,11 @@ class BC(algo_base.DemonstrationAlgorithm):
         self.traj_size_pos_ctrl_pts=traj_size_pos_ctrl_pts;
         self.traj_size_yaw_ctrl_pts=traj_size_yaw_ctrl_pts;
         self.use_closed_form_yaw_student=use_closed_form_yaw_student
-        self.use_Hungarian=use_Hungarian
+        self.type_loss=type_loss
         self.weight_prob=weight_prob;
         self.batch_size = batch_size
         self.only_test_loss = only_test_loss
-        self.epsilon_WTA = epsilon_WTA
+        self.epsilon_RWTA = epsilon_RWTA
         super().__init__(
             demonstrations=demonstrations,
             custom_logger=custom_logger,
@@ -459,7 +459,8 @@ class BC(algo_base.DemonstrationAlgorithm):
                 #Option 2: Winner takes all
                 # A_WTA_matrix=th.zeros(batch_size, num_of_traj_per_action, num_of_traj_per_action, device=used_device, requires_grad=True);
                 # A_WTA_matrix=distance_pos_matrix.clone();
-                A_WTA_matrix=th.zeros_like(distance_pos_matrix)
+                A_RWTAr_matrix=th.zeros_like(distance_pos_matrix)
+                A_RWTAc_matrix=th.zeros_like(distance_pos_matrix)
 
                 for index_batch in range(batch_size):         
 
@@ -484,43 +485,67 @@ class BC(algo_base.DemonstrationAlgorithm):
 
 
                     #########################################################################
-                    #Option 2 Winner takes all: Eq.6 of https://arxiv.org/pdf/2110.05113.pdfs
+                    #Option 1 (Relaxed) Winner takes all 
                     #########################################################################
                     num_diff_traj_expert=cost_matrix.shape[0]
+                    num_traj_student=cost_matrix.shape[1]
 
 
                     distance_pos_matrix_batch_tmp=distance_pos_matrix[index_batch,:,:].clone();
                     distance_pos_matrix_batch_tmp[is_repeated[index_batch,:],:] = float('inf')  #Set the ones that are repeated to infinity
 
+                    ### RWTAc: This version ensures that the columns sum up to one (This is what https://arxiv.org/pdf/2110.05113.pdf does, see Eq.6)
                     minimum_per_column, row_indexes =th.min(distance_pos_matrix_batch_tmp[:,:], 0) #Select the minimum values
 
-
-                    col_indexes=th.range(0, cost_matrix.shape[1], dtype=th.int64)
+                    col_indexes=th.arange(0, distance_pos_matrix_batch_tmp.shape[1], dtype=th.int64)
 
                     if(num_diff_traj_expert>1):
-                        A_WTA_matrix[index_batch,:,:]= (self.epsilon_WTA/(num_diff_traj_expert-1))
+                        A_RWTAc_matrix[index_batch,:,:]= (self.epsilon_RWTA/(num_diff_traj_expert-1))
 
 
                     for row_index, col_index in zip(row_indexes, col_indexes):
                         if(num_diff_traj_expert>1):
-                            value=1-self.epsilon_WTA
+                            value=1-self.epsilon_RWTA
                         else:
                             value=1.0
                         
-                        A_WTA_matrix[index_batch, row_index, col_index]=value
+                        A_RWTAc_matrix[index_batch, row_index, col_index]=value
 
-
-
-                    A_WTA_matrix[index_batch,is_repeated[index_batch,:],:] = th.zeros_like(A_WTA_matrix[index_batch,is_repeated[index_batch,:],:])
-
- 
+                    A_RWTAc_matrix[index_batch,is_repeated[index_batch,:],:] = th.zeros_like(A_RWTAc_matrix[index_batch,is_repeated[index_batch,:],:])
 
                     #assert
-                    should_be_ones=th.sum(A_WTA_matrix[index_batch,:,:], dim=0)
+                    should_be_ones=th.sum(A_RWTAc_matrix[index_batch,:,:], dim=0)
                     tmp=th.isclose(should_be_ones, th.ones_like(should_be_ones))
                     assert th.all(tmp)
 
-                    # A_WTA_matrix[index_batch,indices,:]= (1-self.epsilon_WTA)*th.ones_like(A_WTA_matrix[index_batch,indices,:])
+
+                    ### RWTAr: This version ensure that the non-repeated rows sum up to one
+                    minimum_per_row, col_indexes =th.min(distance_pos_matrix_batch_tmp[:,:], dim=1) #Select the minimum values
+
+                    row_indexes=th.arange(0, distance_pos_matrix_batch_tmp.shape[0], dtype=th.int64)
+
+                    if(num_traj_student>1):
+                        A_RWTAr_matrix[index_batch,:,:]= (self.epsilon_RWTA/(num_traj_student-1))
+
+
+                    for row_index, col_index in zip(row_indexes, col_indexes):
+                        if(num_traj_student>1):
+                            value=1-self.epsilon_RWTA
+                        else:
+                            value=1.0
+                        
+                        A_RWTAr_matrix[index_batch, row_index, col_index]=value
+
+                    A_RWTAr_matrix[index_batch,is_repeated[index_batch,:],:] = th.zeros_like(A_RWTAr_matrix[index_batch,is_repeated[index_batch,:],:])
+
+                    #assert
+                    should_be_ones=th.sum(A_RWTAr_matrix[index_batch,~is_repeated[index_batch,:],:], dim=1)
+                    tmp=th.isclose(should_be_ones, th.ones_like(should_be_ones))
+                    assert th.all(tmp)
+
+                    ###Old
+
+                    # A_WTA_matrix[index_batch,indices,:]= (1-self.epsilon_RWTA)*th.ones_like(A_WTA_matrix[index_batch,indices,:])
 
                     # print(f"A_WTA_matrix HERE=\n{A_WTA_matrix[index_batch,:,:]}")
 
@@ -540,8 +565,8 @@ class BC(algo_base.DemonstrationAlgorithm):
                     #     print(f"A_WTA_matrix before=\n{A_WTA_matrix[index_batch,:,:]}")
 
                     # if(num_diff_traj_expert>1):
-                    #     A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]>1] = (self.epsilon_WTA/(num_diff_traj_expert-1))
-                    # A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]==1] = 1-self.epsilon_WTA
+                    #     A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]>1] = (self.epsilon_RWTA/(num_diff_traj_expert-1))
+                    # A_WTA_matrix[index_batch,:,:][A_WTA_matrix[index_batch,:,:]==1] = 1-self.epsilon_RWTA
 
                     # novale=th.sum(A_WTA_matrix[index_batch,:,:])
                     ######################################
@@ -552,7 +577,7 @@ class BC(algo_base.DemonstrationAlgorithm):
 
 
                     #########################################################################
-                    #Option 1 Solve assignment problem                                       
+                    #Option 2 Solve assignment problem                                       
                     #########################################################################
                     row_indexes, col_indexes = linear_sum_assignment(cost_matrix_numpy)
                     for row_index, col_index in zip(row_indexes, col_indexes):
@@ -627,7 +652,7 @@ class BC(algo_base.DemonstrationAlgorithm):
 
 
 
-            # print(f"Using epsilon={self.epsilon_WTA}")
+            # print(f"Using epsilon={self.epsilon_RWTA}")
 
 
             #each of the terms below are matrices of shape (batch_size)x(num_of_traj_per_action)
@@ -655,9 +680,13 @@ class BC(algo_base.DemonstrationAlgorithm):
             # print(f"pos_loss=\n{pos_loss*10000}")
             # print(f"num_nonzero_A={num_nonzero_A}")
 
-            pos_loss_WTA=th.sum(A_WTA_matrix*distance_pos_matrix)/num_nonzero_A
-            yaw_loss_WTA=th.sum(A_WTA_matrix*distance_yaw_matrix)/num_nonzero_A
-            time_loss_WTA=th.sum(A_WTA_matrix*distance_time_matrix)/num_nonzero_A
+            pos_loss_RWTAr=th.sum(A_RWTAr_matrix*distance_pos_matrix)/num_nonzero_A
+            yaw_loss_RWTAr=th.sum(A_RWTAr_matrix*distance_yaw_matrix)/num_nonzero_A
+            time_loss_RWTAr=th.sum(A_RWTAr_matrix*distance_time_matrix)/num_nonzero_A
+
+            pos_loss_RWTAc=th.sum(A_RWTAc_matrix*distance_pos_matrix)/num_nonzero_A
+            yaw_loss_RWTAc=th.sum(A_RWTAc_matrix*distance_yaw_matrix)/num_nonzero_A
+            time_loss_RWTAc=th.sum(A_RWTAc_matrix*distance_time_matrix)/num_nonzero_A
 
             assert (distance_matrix.shape)[0]==batch_size, "Wrong shape!"
             assert (distance_matrix.shape)[1]==num_of_traj_per_action, "Wrong shape!"
@@ -665,25 +694,36 @@ class BC(algo_base.DemonstrationAlgorithm):
             assert yaw_loss.requires_grad==True
             assert time_loss.requires_grad==True
 
-            assert pos_loss_WTA.requires_grad==True
-            assert yaw_loss_WTA.requires_grad==True
-            assert time_loss_WTA.requires_grad==True
+            assert pos_loss_RWTAr.requires_grad==True
+            assert yaw_loss_RWTAr.requires_grad==True
+            assert time_loss_RWTAr.requires_grad==True
+
+            assert pos_loss_RWTAc.requires_grad==True
+            assert yaw_loss_RWTAc.requires_grad==True
+            assert time_loss_RWTAc.requires_grad==True
+
             # assert A_WTA_matrix.requires_grad==True
 
             # assert prob_loss.requires_grad==True
 
             loss_Hungarian=pos_loss +  time_loss#  + yaw_loss
 
-            loss_WTA = pos_loss_WTA + time_loss_WTA
+            loss_RWTAr = pos_loss_RWTAr + time_loss_RWTAr
+            loss_RWTAc = pos_loss_RWTAc + time_loss_RWTAc
 
             if(self.use_closed_form_yaw_student==False):
-                loss_Hungarian = loss_Hungarian + yaw_loss
-                loss_WTA = loss_WTA + yaw_loss_WTA
+                loss_Hungarian +=  yaw_loss
+                loss_RWTAr +=  yaw_loss_RWTAr
+                loss_RWTAc +=  yaw_loss_RWTAc
 
-            if(self.use_Hungarian):
+            if(self.type_loss=="Hung"):
                 loss=loss_Hungarian
+            elif(self.type_loss=="RWTAr"):
+                loss=loss_RWTAr
+            elif(self.type_loss=="RWTAc"):
+                loss=loss_RWTAc
             else:
-                loss=loss_WTA
+                assert False
 
             
             # print("loss=\n", loss)
@@ -693,7 +733,8 @@ class BC(algo_base.DemonstrationAlgorithm):
             ##########################
             stats_dict = dict(
                 loss=loss.item(),
-                loss_WTA=loss_WTA.item(),
+                loss_RWTAr=loss_RWTAr.item(),
+                loss_RWTAc=loss_RWTAc.item(),
                 loss_Hungarian=loss_Hungarian.item(),
                 pos_loss=pos_loss.item(),
                 yaw_loss=yaw_loss.item(),
