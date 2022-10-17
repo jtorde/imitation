@@ -59,7 +59,7 @@ setup(
     install_requires=[
         # TODO(adam): unpeg gym once SB3 includes workaround for pickle compatibility
         # See https://github.com/DLR-RM/stable-baselines3/issues/573
-        "gym[classic_control]==0.19.0",
+        "gym[classic_control]==0.21.0",
         "matplotlib",
         "numpy>=1.15",
         "torch>=1.4.0",
