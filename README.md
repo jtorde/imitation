@@ -4,6 +4,10 @@
 [![PyPI version](https://badge.fury.io/py/imitation.svg)](https://badge.fury.io/py/imitation)
 
 
+Forked from [https://github.com/HumanCompatibleAI/imitation](https://github.com/HumanCompatibleAI/imitation)
+
+This repo is used as a submodule inside [https://github.com/mit-acl/deep_panther](https://github.com/mit-acl/deep_panther)
+
 # Imitation Learning Baseline Implementations
 
 This project aims to provide clean implementations of imitation and reward learning algorithms.
