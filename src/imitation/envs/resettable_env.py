@@ -5,9 +5,9 @@ These are handy when you want to perform exact maxent policy optimisation.
 
 import abc
 
-import gym
+import gymnasium as gym
 import numpy as np
-from gym import spaces
+from gymnasium import spaces
 from stable_baselines3.common import vec_env
 
 

@@ -456,7 +456,7 @@ def _generate_test_rollouts(tmpdir: str, env_named_config: str) -> pathlib.Path:
 
 
 def test_parallel_train_adversarial_custom_env(tmpdir):
-    import gym
+    import gymnasium as gym
 
     try:
         gym.make("seals/Ant-v0")

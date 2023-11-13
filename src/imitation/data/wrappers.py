@@ -2,7 +2,7 @@
 
 from typing import Sequence, Tuple
 
-import gym
+import gymnasium as gym
 import numpy as np
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper
 

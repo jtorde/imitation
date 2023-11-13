@@ -2,8 +2,8 @@
 
 import os
 
-import gym
-from gym.wrappers.monitoring import video_recorder
+import gymnasium as gym
+from gymnasium.wrappers.monitoring import video_recorder
 
 from imitation.data import types
 

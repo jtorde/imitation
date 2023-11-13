@@ -3,7 +3,7 @@
 import abc
 from typing import Callable, Iterable, Sequence, Tuple
 
-import gym
+import gymnasium as gym
 import numpy as np
 import torch as th
 from stable_baselines3.common import preprocessing

@@ -8,7 +8,7 @@ Follows the description in chapters 9 and 10 of Brian Ziebart's `PhD thesis`_.
 
 from typing import Any, Iterable, Mapping, Optional, Tuple, Type, Union
 
-import gym
+import gymnasium as gym
 import numpy as np
 import scipy.special
 import torch as th
