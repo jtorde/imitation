@@ -17,10 +17,10 @@ from typing import (
     Union,
 )
 
-import gym
+import gymnasium as gym
 import numpy as np
 import torch as th
-from gym.wrappers import TimeLimit
+from gymnasium.wrappers import TimeLimit
 from stable_baselines3.common import monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
@@ -85,7 +85,7 @@ def make_vec_env(
         # Seed each environment with a different, non-sequential seed for diversity
         # (even if caller is passing us sequentially-assigned base seeds). int() is
         # necessary to work around gym bug where it chokes on numpy int64s.
-        env.seed(int(this_seed))
+        env.reset(seed=int(this_seed))
 
         if max_episode_steps is not None:
             env = TimeLimit(env, max_episode_steps)

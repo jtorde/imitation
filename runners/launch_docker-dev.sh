@@ -44,7 +44,7 @@ if [[ ${MJKEY_MNT} == "" ]]; then
 fi
 
 # install imitation in developer mode
-CMD="pip install -e .[docs,parallel,test] gym[mujoco]" # borrowed from ci/build_venv.sh
+CMD="pip install -e .[docs,parallel,test] gymnasium[mujoco]" # borrowed from ci/build_venv.sh
 
 # Pull image from DockerHub if prompted
 if [[ $PULL == 1 ]]; then

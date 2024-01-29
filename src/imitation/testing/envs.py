@@ -4,7 +4,7 @@ This is used in the imitation test suite and may also be useful for users of thi
 library.
 """
 
-import gym
+import gymnasium as gym
 
 
 def test_model_based(env: gym.Env) -> None:

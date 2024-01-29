@@ -1,6 +1,6 @@
 """Tests for `imitation.envs.*`."""
 
-import gym
+import gymnasium as gym
 import numpy as np
 import pytest
 from seals.testing import envs as seals_test

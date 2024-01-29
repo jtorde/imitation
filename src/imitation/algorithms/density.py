@@ -9,7 +9,7 @@ import itertools
 from typing import Iterable, Mapping, Optional
 
 import numpy as np
-from gym.spaces.utils import flatten
+from gymnasium.spaces.utils import flatten
 from sklearn import neighbors, preprocessing
 from stable_baselines3.common import base_class, vec_env
 

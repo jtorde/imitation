@@ -2,7 +2,7 @@
 
 from typing import Any, Mapping, Type
 
-import gym
+import gymnasium as gym
 import numpy as np
 import pytest
 import torch as th

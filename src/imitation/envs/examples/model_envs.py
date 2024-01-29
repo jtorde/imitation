@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 from imitation.envs.resettable_env import TabularModelEnv
